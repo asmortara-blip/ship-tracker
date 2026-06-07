@@ -97,6 +97,7 @@ try:
         list_reports as _list_reports,
         load_report_html as _load_report_html,
         save_report as _save_report,
+        version_chain as _version_chain,
     )
     _HISTORY_OK = True
 except Exception:
@@ -105,6 +106,7 @@ except Exception:
     def _load_report_html(rid): return None
     def _delete_report(rid): return False
     def _save_report(html, obj): return None
+    def _version_chain(rid, **kwargs): return []
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────────
@@ -774,6 +776,10 @@ def _render_history() -> None:
     # Per-row public-share controls — uses attribute access on ReportMeta.
     _render_share_links(reports[:10])
 
+    # Immutable version lineage (R119) — show the supersede/amend chain for
+    # any report that is itself an amendment or has been amended.
+    _render_version_lineage(reports[:10])
+
 
 def _render_share_links(reports: list) -> None:
     """Render per-report 'Generate share link' / 'Revoke' / 'Regenerate' controls."""
@@ -903,6 +909,85 @@ def _render_share_links(reports: list) -> None:
                             st.error(f"Share link error: {exc}")
         except Exception as exc:
             logger.warning(f"Could not render share row: {exc}")
+
+
+# ── Section 6a2: Version lineage (immutable supersede/amend chain, R119) ──────
+
+def _render_version_lineage(reports: list) -> None:
+    """Render the immutable version chain for each amended report.
+
+    A report can no longer be edited in place — an amendment mints a new
+    immutable row that links back to its predecessor (see
+    ``utils.report_history.amend_report``). For every displayed report that
+    is part of a multi-version lineage (it's an amendment, OR it has been
+    amended), this renders a small "Version N · supersedes <id> · amended
+    <when>" line plus the ordered chain (oldest → newest) in an expander.
+
+    Crash-resilient: a missing ``version_chain`` (history module not loaded)
+    or any per-report error degrades to skipping that row rather than taking
+    down the tab.
+    """
+    if not _HISTORY_OK or not reports:
+        return
+
+    # Build the set of reports that actually have a lineage worth showing —
+    # either report_version > 1 (this row is an amendment) or it heads a
+    # chain that has a later version. We resolve via version_chain so a v1
+    # report that HAS been amended is also surfaced.
+    lineage_rows: list = []
+    seen_heads: set[str] = set()
+    for rep in reports:
+        try:
+            rep_id = getattr(rep, "report_id", None)
+            if not rep_id:
+                continue
+            chain = _version_chain(rep_id)
+            if len(chain) <= 1:
+                continue
+            # De-dup by the chain head so two members of the same chain
+            # appearing in the history list don't render the lineage twice.
+            head_id = chain[0].report_id if chain else rep_id
+            if head_id in seen_heads:
+                continue
+            seen_heads.add(head_id)
+            lineage_rows.append((rep, chain))
+        except Exception as exc:
+            logger.warning(f"version lineage scan failed for a row: {exc}")
+
+    if not lineage_rows:
+        return
+
+    section_header(
+        "Version Lineage",
+        "Immutable amend/supersede chains - originals are never overwritten",
+    )
+
+    for rep, chain in lineage_rows:
+        try:
+            latest = chain[-1]
+            head = chain[0]
+            label = getattr(head, "report_date", None) or head.report_id
+            with st.expander(
+                f"Lineage - {label} ({len(chain)} versions, "
+                f"latest v{latest.report_version})",
+                expanded=False,
+            ):
+                for m in chain:
+                    sup = getattr(m, "supersedes_id", "") or ""
+                    when = getattr(m, "generated_at", "") or ""
+                    sup_note = (
+                        f"supersedes {sup[:8]}" if sup else "original (no predecessor)"
+                    )
+                    line = (
+                        f"Version {m.report_version} - {sup_note} - "
+                        f"amended {when}  [{m.report_id[:8]}]"
+                    )
+                    st.markdown(
+                        _mono(line, color=C_TEXT2),
+                        unsafe_allow_html=True,
+                    )
+        except Exception as exc:
+            logger.warning(f"Could not render version lineage row: {exc}")
 
 
 # ── Section 6b: Compare two reports (report-to-report diff) ───────────────────

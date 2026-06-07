@@ -66,6 +66,8 @@ class ReportMeta:
     public_slug: str = ""        # URL-safe base64url token; "" = not shared
     public_expires_at: str = ""  # ISO-8601 UTC; "" or past time = invalid
     public_password_protected: bool = False  # True iff public link requires a password
+    report_version: int = 1      # 1-indexed position in the lineage (v34)
+    supersedes_id: str = ""      # report_id of the prior version; "" = original (v34)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +175,19 @@ def _row_to_meta(row) -> ReportMeta:
         public_password_protected = bool(_pw_hash)
     except (IndexError, KeyError):
         public_password_protected = False
+    # v34 lineage columns — tolerate rows from a pre-v34 DB / a row factory
+    # that strips columns. report_version defaults to 1 (original);
+    # supersedes_id is NULL for an original report, which we normalise to ""
+    # on the meta so the dataclass carries a plain string.
+    try:
+        _rv = row["report_version"]
+        report_version = int(_rv) if _rv is not None else 1
+    except (IndexError, KeyError, TypeError, ValueError):
+        report_version = 1
+    try:
+        supersedes_id = row["supersedes_id"] or ""
+    except (IndexError, KeyError):
+        supersedes_id = ""
     return ReportMeta(
         report_id=row["report_id"],
         generated_at=row["generated_at"],
@@ -187,6 +202,8 @@ def _row_to_meta(row) -> ReportMeta:
         public_slug=public_slug,
         public_expires_at=public_expires_at,
         public_password_protected=public_password_protected,
+        report_version=report_version,
+        supersedes_id=supersedes_id,
     )
 
 
@@ -238,20 +255,13 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
 
         uid = current_user_id()
         conn = get_connection()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO report_history
-                  (report_id, generated_at, report_date, sentiment_label,
-                   sentiment_score, risk_level, signal_count, data_quality,
-                   file_path, file_size_kb, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (meta.report_id, meta.generated_at, meta.report_date,
-                 meta.sentiment_label, meta.sentiment_score, meta.risk_level,
-                 meta.signal_count, meta.data_quality, meta.file_path,
-                 meta.file_size_kb, uid),
-            )
+        # A fresh save is always version 1 with no predecessor — the v34
+        # lineage columns are written explicitly (rather than left to the
+        # DEFAULT) so the row shape is identical whether it was minted here
+        # or by :func:`amend_report`.
+        meta.report_version = 1
+        meta.supersedes_id = ""
+        _insert_report_row(conn, meta, uid, report_version=1, supersedes_id=None)
 
         # Audit-log the generation. Placed AFTER the row was successfully
         # inserted so we only emit an event when the report actually
@@ -868,8 +878,307 @@ def get_report_stats(*, user_id: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Immutable version / supersede-amend lineage (R119)
+# ---------------------------------------------------------------------------
+
+
+def amend_report(
+    original_report_id: str,
+    new_html: str,
+    *,
+    user_id: str | None = None,
+    reason: str = "",
+) -> str | None:
+    """Mint a NEW immutable report row that supersedes *original_report_id*.
+
+    A report is never edited in place. Instead an amendment writes a fresh
+    ``report_history`` row (new ``report_id``, new on-disk HTML file) whose
+    ``report_version`` is ``original.report_version + 1`` and whose
+    ``supersedes_id`` points back at *original_report_id*. The original row
+    is left COMPLETELY untouched, so the full version chain stays auditable
+    via :func:`version_chain`.
+
+    The new row inherits the original's metadata (sentiment, risk, etc.) —
+    an amendment is a re-issue of the SAME report with corrected/updated
+    content, not a freshly-computed report — except for ``generated_at``
+    (stamped now), the file path (new file), and the lineage columns. The
+    new row is owned by the same user as the original (per-user scoping is
+    honoured on the lookup), so an amendment can only be made within the
+    caller's own scope.
+
+    Args:
+        original_report_id: The report_id of the version being amended.
+        new_html:           The corrected/updated HTML for the new version.
+        user_id:            Optional explicit owner id. ``None`` resolves to
+                            the active Streamlit user via ``current_user_id``.
+        reason:             Free-form amendment reason, recorded on the audit
+                            event (best-effort). Not persisted as a column.
+
+    Returns:
+        The new report_id on success, or ``None`` if the original cannot be
+        found in scope or anything else goes wrong (never raises).
+    """
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+        conn = get_connection()
+        # Load the original row in-scope. A non-owner gets the same None
+        # return as an unknown report_id — no cross-scope amend.
+        orig = conn.execute(
+            f"SELECT * FROM report_history WHERE report_id = ? {scope_sql}",
+            (original_report_id, *scope_params),
+        ).fetchone()
+        if orig is None:
+            logger.debug(f"amend_report: original not found: {original_report_id}")
+            return None
+
+        orig_meta = _row_to_meta(orig)
+        # The row's owner stamp drives the new row's owner so the amendment
+        # lands in the same scope as the report it supersedes.
+        try:
+            orig_uid = orig["user_id"]
+        except (IndexError, KeyError):
+            orig_uid = uid
+
+        new_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{timestamp_str}_{new_id[:8]}.html"
+        file_path = REPORT_DIR / filename
+        file_path.write_text(new_html, encoding="utf-8")
+        file_size_kb = round(file_path.stat().st_size / 1024, 2)
+
+        new_version = int(orig_meta.report_version) + 1
+        new_meta = ReportMeta(
+            report_id=new_id,
+            generated_at=now.isoformat(),
+            report_date=orig_meta.report_date,
+            sentiment_label=orig_meta.sentiment_label,
+            sentiment_score=orig_meta.sentiment_score,
+            risk_level=orig_meta.risk_level,
+            signal_count=orig_meta.signal_count,
+            data_quality=orig_meta.data_quality,
+            file_path=str(file_path.resolve()),
+            file_size_kb=file_size_kb,
+            report_version=new_version,
+            supersedes_id=original_report_id,
+        )
+
+        # NB: we deliberately DO NOT touch the original row here — it stays
+        # immutable. We only INSERT the new version.
+        _insert_report_row(
+            conn, new_meta, orig_uid,
+            report_version=new_version,
+            supersedes_id=original_report_id,
+        )
+
+        # Audit-log the amendment (best-effort). The chain link + reason are
+        # the payload a reviewer wants ("v2 of X, because ...").
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "amend_report",
+                entity_type="report",
+                entity_id=new_id,
+                detail={
+                    "supersedes_id": original_report_id,
+                    "report_version": new_version,
+                    "reason": (reason or "")[:200],
+                },
+                user_id=orig_uid,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Pruning is intentionally NOT triggered here: an amendment is a
+        # deliberate audit action and we don't want the freshly-minted
+        # version (or its predecessor) silently pruned out from under a
+        # lineage the caller just created.
+        logger.info(
+            f"Report amended: {original_report_id} -> {new_id} "
+            f"(v{new_version})"
+        )
+        return new_id
+    except Exception as exc:
+        logger.error(f"amend_report failed for {original_report_id}: {exc}")
+        return None
+
+
+def reissue_report(
+    original_report_id: str,
+    *,
+    user_id: str | None = None,
+    reason: str = "",
+) -> str | None:
+    """Re-issue *original_report_id* as a NEW version with the SAME content.
+
+    A reissue is an :func:`amend_report` where the content is unchanged —
+    the same HTML is re-stamped as version N+1 (e.g. a re-fire of an
+    identical briefing under a new immutable id). It loads the original's
+    on-disk HTML and delegates to :func:`amend_report`, so the lineage
+    semantics (new row, ``supersedes_id`` link, original untouched) are
+    identical. If the original's HTML cannot be read, returns ``None``.
+
+    Returns the new report_id on success, or ``None`` on any failure
+    (never raises).
+    """
+    try:
+        html = load_report_html(original_report_id, user_id=user_id)
+        if html is None:
+            logger.debug(
+                f"reissue_report: could not load HTML for {original_report_id}"
+            )
+            return None
+        return amend_report(
+            original_report_id,
+            html,
+            user_id=user_id,
+            reason=reason or "reissue",
+        )
+    except Exception as exc:
+        logger.error(f"reissue_report failed for {original_report_id}: {exc}")
+        return None
+
+
+def version_chain(
+    report_id: str,
+    *,
+    user_id: str | None = None,
+) -> list[ReportMeta]:
+    """Return the full version lineage for *report_id*, oldest → newest.
+
+    Given any report in a chain, walks BOTH directions:
+      * backwards via ``supersedes_id`` (this row → its predecessor → ...)
+        until it reaches the original (NULL/empty ``supersedes_id``);
+      * forwards by finding the row whose ``supersedes_id`` equals each
+        known id, until no successor exists.
+
+    The returned list is ordered oldest-first (version 1 → latest). A v1
+    report with no supersedes and no successor yields a single-element
+    chain. Honours per-user scoping: only rows in the caller's scope are
+    traversed (a missing in-scope link simply truncates the walk).
+
+    Cycle-guarded: a ``supersedes_id`` that loops back to an already-seen
+    id terminates the walk rather than spinning forever. Returns an empty
+    list if *report_id* itself is not found in scope, or on any error
+    (never raises).
+    """
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        conn = get_connection()
+
+        def _fetch(rid: str):
+            return conn.execute(
+                f"SELECT * FROM report_history WHERE report_id = ? {scope_sql}",
+                (rid, *scope_params),
+            ).fetchone()
+
+        start = _fetch(report_id)
+        if start is None:
+            logger.debug(f"version_chain: report_id not found: {report_id}")
+            return []
+
+        seen: set[str] = set()
+        by_id: dict[str, ReportMeta] = {}
+
+        # Walk backwards (newest known → oldest) following supersedes_id.
+        cur = start
+        while cur is not None:
+            rid = cur["report_id"]
+            if rid in seen:  # cycle guard
+                break
+            seen.add(rid)
+            by_id[rid] = _row_to_meta(cur)
+            try:
+                prev_id = cur["supersedes_id"]
+            except (IndexError, KeyError):
+                prev_id = None
+            if not prev_id or prev_id in seen:
+                break
+            cur = _fetch(prev_id)
+
+        # Walk forwards (each known id → the row that supersedes it).
+        frontier = list(seen)
+        while frontier:
+            parent_id = frontier.pop()
+            succ = conn.execute(
+                f"SELECT * FROM report_history "
+                f"WHERE supersedes_id = ? {scope_sql}",
+                (parent_id, *scope_params),
+            ).fetchall()
+            for row in succ:
+                rid = row["report_id"]
+                if rid in seen:  # cycle guard
+                    continue
+                seen.add(rid)
+                by_id[rid] = _row_to_meta(row)
+                frontier.append(rid)
+
+        # Order oldest → newest: primarily by report_version, then by
+        # generated_at as a tie-breaker (defensive against duplicate
+        # version numbers in a malformed chain).
+        chain = sorted(
+            by_id.values(),
+            key=lambda m: (int(m.report_version), str(m.generated_at)),
+        )
+        return chain
+    except Exception as exc:
+        logger.error(f"version_chain failed for {report_id}: {exc}")
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _insert_report_row(
+    conn,
+    meta: "ReportMeta",
+    uid: str,
+    *,
+    report_version: int = 1,
+    supersedes_id: "str | None" = None,
+) -> None:
+    """Insert one fully-formed report row, including the v34 lineage columns.
+
+    Shared by :func:`save_report` (fresh report → version 1, no
+    predecessor) and :func:`amend_report` (mints version N+1 linked to its
+    predecessor via ``supersedes_id``). The lineage columns are written
+    explicitly so every row has an identical shape regardless of which
+    path created it.
+
+    ``supersedes_id`` is stored as SQL NULL for an original report (the
+    "head of chain" marker) and as the predecessor's ``report_id`` for an
+    amendment. The write runs inside ``with conn:`` so it is atomic.
+    """
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO report_history
+              (report_id, generated_at, report_date, sentiment_label,
+               sentiment_score, risk_level, signal_count, data_quality,
+               file_path, file_size_kb, user_id,
+               report_version, supersedes_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (meta.report_id, meta.generated_at, meta.report_date,
+             meta.sentiment_label, meta.sentiment_score, meta.risk_level,
+             meta.signal_count, meta.data_quality, meta.file_path,
+             meta.file_size_kb, uid,
+             int(report_version), supersedes_id),
+        )
+
 
 def _prune_old_reports() -> None:
     """Keep only the MAX_REPORTS most recent rows; delete pruned files."""

@@ -1339,3 +1339,53 @@ def _migrate_to_v33(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v33 CREATE TABLE failed: {exc}"
         )
+
+
+# ─── Schema v33 → v34 ─────────────────────────────────────────────────────
+
+def _migrate_to_v34(conn: sqlite3.Connection) -> None:
+    """Add ``report_version`` + ``supersedes_id`` to ``report_history`` for
+    immutable report version / supersede-amend lineage (R119).
+
+    A report can no longer be edited in place — an amendment mints a NEW
+    immutable ``report_history`` row that LINKS back to its predecessor, so
+    the full version chain stays auditable. Two columns land in this
+    migration, both on ``report_history``:
+
+      * ``report_version`` — ``INTEGER NOT NULL DEFAULT 1``. The 1-indexed
+        position of this row in its lineage. Pre-v34 rows (and every
+        first-issue report) pick up the default 1, which matches the
+        implicit pre-feature meaning ("this is the original, un-amended
+        report"). An amendment writes ``previous.report_version + 1``.
+      * ``supersedes_id`` — ``TEXT`` (NULLable, no DEFAULT). The
+        ``report_id`` of the immediately-prior version this row supersedes.
+        NULL on purpose for a v1 / original report: at the SQL level a NULL
+        ``supersedes_id`` is the unambiguous "this is the head of the
+        chain" marker, distinguishable from an empty-string id. The
+        version-chain walk follows this column backwards (newest → oldest)
+        and terminates at the NULL.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v17`` / ``_migrate_to_v18``: SQLite
+    does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so each statement is
+    wrapped in try/except and "duplicate column name" errors are swallowed.
+    Each column is added in its own try/except so partial completion of a
+    prior run is also tolerated, and re-running on a fully-migrated DB is a
+    no-op.
+    """
+    for col_name, col_def in (
+        ("report_version", "INTEGER NOT NULL DEFAULT 1"),
+        ("supersedes_id", "TEXT"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE report_history ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v34 ALTER TABLE "
+                f"({col_name}) failed: {exc}"
+            )

@@ -288,7 +288,7 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 33
+SCHEMA_VERSION: int = 34
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -1375,6 +1375,28 @@ _SCHEMA_V33_NOTE: str = (
 )
 
 
+# Schema v34 adds two columns to ``report_history`` for immutable report
+# version / supersede-amend lineage (R119). An amendment mints a NEW row that
+# LINKS to its predecessor instead of mutating the original, so the full
+# version chain stays auditable:
+#
+#   * ``report_version`` INTEGER NOT NULL DEFAULT 1 — 1-indexed position in
+#     the lineage. Pre-v34 rows + every original report pick up 1.
+#   * ``supersedes_id``  TEXT (NULLable) — the report_id of the immediately-
+#     prior version. NULL marks the head/original of a chain; the version-
+#     chain walk follows this column backwards and terminates at the NULL.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v17 — SQLite
+# does not support IF NOT EXISTS on ALTER TABLE. Each column is added in its
+# own try/except so partial completion of a prior run is also tolerated.
+# Added via ``_migrate_to_v34`` in ``state/migrations.py``.
+_SCHEMA_V34_NOTE: str = (
+    "v34: report_history.report_version INTEGER NOT NULL DEFAULT 1 + "
+    "report_history.supersedes_id TEXT (nullable) "
+    "(added via ALTER TABLE in _migrate_to_v34)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1650,6 +1672,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v33(conn)
     except Exception as exc:
         logger.warning(f"state.db: v33 table add skipped: {exc}")
+
+    # v34 column adds — idempotent ALTER-in-try/except (same as v4/v5/v17).
+    # Adds report_history.report_version + report_history.supersedes_id for
+    # immutable report version / supersede-amend lineage (R119). Runs
+    # unconditionally on every open (fresh DB: adds the columns; existing DB:
+    # no-op when present).
+    try:
+        from state.migrations import _migrate_to_v34
+        _migrate_to_v34(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v34 column adds skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -2052,6 +2085,27 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v32(conn)
         except Exception as exc:
             logger.warning(f"state.db: v32 migration skipped: {exc}")
+
+    # Migration 32 → 33: add the data_fetches provenance ledger. Idempotent
+    # CREATE TABLE IF NOT EXISTS (add-only) — the helper is already invoked
+    # unconditionally above; this keeps the version-step ladder explicit.
+    if current < 33:
+        try:
+            from state.migrations import _migrate_to_v33
+            _migrate_to_v33(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v33 migration skipped: {exc}")
+
+    # Migration 33 → 34: add report_history.report_version + supersedes_id
+    # (immutable report version / supersede-amend lineage, R119). Idempotent
+    # ALTER-in-try/except — the helper is already invoked unconditionally
+    # above; this keeps the version-step ladder explicit.
+    if current < 34:
+        try:
+            from state.migrations import _migrate_to_v34
+            _migrate_to_v34(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v34 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(
