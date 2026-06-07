@@ -72,7 +72,7 @@ def normalize_trade_df(df: pd.DataFrame) -> pd.DataFrame:
         out = out.dropna(subset=["date"])
         out = out.sort_values("date").reset_index(drop=True)
         logger.debug(f"normalize_trade_df: {len(out)} rows")
-        return out[TRADE_COLS]
+        return _finalize(out[TRADE_COLS], "comtrade")
 
     except Exception as exc:
         logger.error(f"normalize_trade_df failed: {exc}")
@@ -103,7 +103,7 @@ def normalize_freight_df(
         out = out[out["rate_usd_per_feu"] > 0]
         out = out.sort_values("date").reset_index(drop=True)
         logger.debug(f"normalize_freight_df [{route_id}]: {len(out)} rows")
-        return out[FREIGHT_COLS]
+        return _finalize(out[FREIGHT_COLS], "freight_scraper")
 
     except Exception as exc:
         logger.error(f"normalize_freight_df failed: {exc}")
@@ -126,7 +126,7 @@ def normalize_ais_df(df: pd.DataFrame) -> pd.DataFrame:
         out = out.dropna(subset=["date"])
         out = out.sort_values("date").reset_index(drop=True)
         logger.debug(f"normalize_ais_df: {len(out)} rows")
-        return out[AIS_COLS]
+        return _finalize(out[AIS_COLS], "aishub")
 
     except Exception as exc:
         logger.error(f"normalize_ais_df failed: {exc}")
@@ -155,7 +155,7 @@ def normalize_macro_df(df: pd.DataFrame, series_id: str = "", series_name: str =
         out = out.dropna(subset=["date", "value"])
         out = out.sort_values("date").reset_index(drop=True)
         logger.debug(f"normalize_macro_df [{series_id}]: {len(out)} rows")
-        return out[MACRO_COLS]
+        return _finalize(out[MACRO_COLS], "fred")
 
     except Exception as exc:
         logger.error(f"normalize_macro_df failed: {exc}")
@@ -194,7 +194,7 @@ def normalize_stock_df(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
         out = out.dropna(subset=["date", "close"])
         out = out.sort_values("date").reset_index(drop=True)
         logger.debug(f"normalize_stock_df [{symbol}]: {len(out)} rows")
-        return out[STOCK_COLS]
+        return _finalize(out[STOCK_COLS], "stock")
 
     except Exception as exc:
         logger.error(f"normalize_stock_df [{symbol}] failed: {exc}")
@@ -222,7 +222,7 @@ def normalize_throughput_df(df: pd.DataFrame) -> pd.DataFrame:
         out = out[out["year"] > 0]
         out = out.sort_values("year").reset_index(drop=True)
         logger.debug(f"normalize_throughput_df: {len(out)} rows")
-        return out[THROUGHPUT_COLS]
+        return _finalize(out[THROUGHPUT_COLS], "worldbank")
 
     except Exception as exc:
         logger.error(f"normalize_throughput_df failed: {exc}")
@@ -236,3 +236,24 @@ def normalize_throughput_df(df: pd.DataFrame) -> pd.DataFrame:
 def _empty(columns: list[str]) -> pd.DataFrame:
     """Return an empty DataFrame with the given columns."""
     return pd.DataFrame(columns=columns)
+
+
+def _finalize(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
+    """Pure-observability contract gate (R116).
+
+    Run the per-feed data-quality contract over the freshly-normalized frame
+    and record any violation. This is PURE OBSERVABILITY: it returns the SAME
+    DataFrame object, untouched — it never drops rows, mutates the frame,
+    blocks the feed, or raises. The entire body is wrapped so a contract bug
+    can never break data loading; on any failure the frame is returned as-is.
+
+    A source with no registered contract is a complete no-op.
+    """
+    try:
+        from data.contracts import observe_contract
+
+        observe_contract(df, source_name)
+    except Exception as exc:  # pragma: no cover — defence in depth
+        # NEVER let an observability check break a feed.
+        logger.debug(f"normalizer._finalize contract check skipped: {exc}")
+    return df
