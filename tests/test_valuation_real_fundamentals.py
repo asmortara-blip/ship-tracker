@@ -68,15 +68,17 @@ def test_full_payload_populates_real_fields() -> None:
             "price": 20.0,
         },
     )
-    # fcf_0 ← real EBITDA proxy
-    assert got.fcf_0 == 1200.0
+    # fcf_0 is DELIBERATELY left assumed (review): AV EBITDA is a PROXY for FCF,
+    # is a single-QUARTER figure, and is raw USD where fcf_0 expects millions —
+    # stamping it 'real' measured-annual-FCF would misrepresent + mis-scale it.
+    assert got.fcf_0 == ValuationInputs().fcf_0
     # fcf_growth ← measured YoY percent → fraction
     assert got.fcf_growth == pytest.approx(0.08)
     # shares ← market_cap(USD bn) / price → millions: 2.5e9 / 20 / 1e6 = 125M
     assert got.shares_outstanding == pytest.approx(125.0)
-    # provenance: the three populated fields are 'real'
+    # provenance: only the clean, unit-safe fields are 'real'; fcf_0 stays assumed
     prov = got.input_provenance
-    assert prov["fcf_0"] == "real"
+    assert prov["fcf_0"] == "assumed"
     assert prov["fcf_growth"] == "real"
     assert prov["shares_outstanding"] == "real"
     # discount_rate / terminal_growth / net_debt stay assumed (honest: AV gives
@@ -102,12 +104,22 @@ def test_negative_growth_is_real_and_signed() -> None:
 
 def test_partial_payload_mixes_real_and_assumed() -> None:
     default = ValuationInputs()
+    # A real growth + share inputs but no clean FCF input → growth/shares real,
+    # fcf_0 assumed (EBITDA no longer maps to fcf_0).
+    got = fundamentals_to_valuation_inputs(
+        "X", av_data={"revenue_growth_yoy_pct": 8.0, "ebitda": 800.0})
+    assert got.fcf_0 == default.fcf_0
+    assert got.input_provenance["fcf_0"] == "assumed"
+    assert got.input_provenance["fcf_growth"] == "real"
+
+
+def test_ebitda_only_payload_is_all_assumed() -> None:
+    """EBITDA alone no longer populates fcf_0 (proxy + quarterly + raw-USD units,
+    review) — an EBITDA-only payload yields the all-assumed default."""
+    default = ValuationInputs()
     got = fundamentals_to_valuation_inputs("X", av_data={"ebitda": 800.0})
-    assert got.fcf_0 == 800.0
-    assert got.input_provenance["fcf_0"] == "real"
-    # everything else untouched + assumed
-    assert got.shares_outstanding == default.shares_outstanding
-    assert got.fcf_growth == default.fcf_growth
+    assert got.fcf_0 == default.fcf_0
+    assert all(v == "assumed" for v in got.input_provenance.values())
     for f in ("fcf_growth", "discount_rate", "terminal_growth",
               "shares_outstanding", "net_debt"):
         assert got.input_provenance[f] == "assumed"
@@ -154,8 +166,10 @@ def test_result_is_consumable_by_dcf() -> None:
     )
     res = dcf_valuation(vi, horizon=5)
     assert res.per_share_value > 0
-    assert res.input_provenance["fcf_0"] == "real"
+    assert res.input_provenance["fcf_growth"] == "real"
     assert res.input_provenance["shares_outstanding"] == "real"
+    # fcf_0 stays assumed (EBITDA proxy not mapped); discount always assumed
+    assert res.input_provenance["fcf_0"] == "assumed"
     assert res.input_provenance["discount_rate"] == "assumed"
 
 

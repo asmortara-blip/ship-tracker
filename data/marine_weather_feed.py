@@ -110,11 +110,12 @@ def _read_cache(lat: float, lon: float, ttl_hours: float) -> Optional[MarineCond
     path = _cache_path(lat, lon)
     if not path.exists():
         return None
+    if ttl_hours <= 0:
+        return None  # ttl<=0 forces a cache MISS (documented bypass), not a read
     try:
-        if ttl_hours > 0:
-            age_hours = (time.time() - path.stat().st_mtime) / 3600
-            if age_hours > ttl_hours:
-                return None
+        age_hours = (time.time() - path.stat().st_mtime) / 3600
+        if age_hours > ttl_hours:
+            return None
         data = json.loads(path.read_text())
         return MarineConditions(**data)
     except Exception as exc:

@@ -77,9 +77,13 @@ class _Voyage:
 @pytest.fixture(autouse=True)
 def _no_cache(tmp_path, monkeypatch):
     """Point the JSON cache sidecar at a temp dir so tests never read a real,
-    possibly-stale cache and never write into the repo cache tree."""
+    possibly-stale cache and never write into the repo cache tree. Also drop the
+    live-list plausibility floor to 1 so the small-fixture parse/screen/rows tests
+    exercise the LIVE path; the floor itself is tested explicitly in
+    test_fetch_garbage_html_below_floor_is_dark (which restores it)."""
     import data.sanctions_feed as sf
     monkeypatch.setattr(sf, "_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(sf, "_MIN_PLAUSIBLE_DESIGNATIONS", 1)
     yield
 
 
@@ -291,3 +295,26 @@ class _RaisingRequests:
     @staticmethod
     def get(*a, **k):
         raise OSError("offline")
+
+
+def test_fetch_garbage_html_below_floor_is_dark(monkeypatch):
+    """A 200 HTML error page with a comma-bearing line csv-parses to a stray row
+    or two — below the plausibility floor → DEMO, NOT a LIVE screen (review HIGH:
+    don't badge garbage as a live OFAC screen + cache it 24h)."""
+    import data.sanctions_feed as sf
+    monkeypatch.setattr(sf, "_MIN_PLAUSIBLE_DESIGNATIONS", 100)  # the real floor
+    garbage = ("<html><body>The site is down for maintenance. "
+               "Contact 555, 1234567, support.</body></html>")
+    sl = fetch_ofac_sdn(http_get=_ok(garbage), force_refresh=True)
+    assert sl.entities == []
+    assert sl.source.kind == DataKind.DEMO   # never LIVE over garbage
+
+
+def test_screen_no_false_imo_hit_on_embedded_digits(live_list):
+    """Free text that merely CONTAINS a sanctioned vessel's 7-digit IMO must NOT
+    false-positive as sanctioned (review HIGH). Only a bare IMO or an explicit
+    'IMO 1234567' token matches the IMO branch."""
+    assert screen_entity("9176187", live_list) is not None           # bare IMO hits
+    assert screen_entity("IMO 9176187", live_list) is not None       # explicit token hits
+    assert screen_entity("ACME LOGISTICS 9176187", live_list) is None  # embedded → NO hit
+    assert screen_entity("INVOICE 9176187 LLC", live_list) is None

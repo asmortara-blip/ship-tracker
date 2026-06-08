@@ -106,6 +106,12 @@ _COL_REMARKS = 11
 # writes it in the Remarks field (e.g. "Vessel Flag Panama; ... IMO 9176187").
 _IMO_RE = re.compile(r"\bIMO\s*([0-9]{7})\b", re.IGNORECASE)
 
+# Structural-plausibility floor: the real OFAC SDN consolidated list always has
+# thousands of designations, so a 200 that parses to fewer than this is a failed
+# fetch (HTML error/outage page, truncated body) — NOT an honest list. Used to
+# refuse badging garbage as a live screen (review).
+_MIN_PLAUSIBLE_DESIGNATIONS = 100
+
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "sanctions"
 try:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,7 +302,12 @@ def parse_sdn_csv(text: str) -> list:
         vess_owner = _clean(row[_COL_VESS_OWNER]) if len(row) > _COL_VESS_OWNER else ""
         remarks = _clean(row[_COL_REMARKS]) if len(row) > _COL_REMARKS else ""
 
-        imo = _normalize_imo(remarks)
+        # Anchored extraction only: take an IMO from Remarks ONLY when the
+        # explicit "IMO 1234567" token is present (how OFAC writes it). Do NOT
+        # use the digit-strip fallback here — a stray 7-digit number in free-text
+        # remarks (a phone/registration/UN-list id) is NOT a vessel IMO (review).
+        _m = _IMO_RE.search(remarks)
+        imo = _m.group(1) if _m else ""
 
         entities.append(SanctionedEntity(
             ent_num=ent_num,
@@ -370,11 +381,15 @@ def fetch_ofac_sdn(
 
         text = getattr(resp, "text", "") or ""
         entities = parse_sdn_csv(text)
-        if not entities:
-            # A 200 that parsed to zero rows is a STRUCTURAL failure (HTML error
-            # page, truncated body, …), NOT an honest empty list — OFAC always
-            # has thousands of designations. Do not cache; degrade to modeled.
-            logger.debug("sanctions_feed: OFAC 200 parsed to 0 rows — treated as failure")
+        if len(entities) < _MIN_PLAUSIBLE_DESIGNATIONS:
+            # The real OFAC SDN list always has THOUSANDS of designations. A 200
+            # that parses to fewer than the floor is a STRUCTURAL failure (an HTML
+            # error/outage page can csv-parse to a stray row or two when a line
+            # contains a comma, truncated body, …), NOT an honest list. Do not
+            # cache; degrade to modeled — never badge garbage as a live screen.
+            logger.debug(
+                f"sanctions_feed: OFAC 200 parsed to {len(entities)} rows "
+                f"(< {_MIN_PLAUSIBLE_DESIGNATIONS}) — treated as failure")
             return _dark("failed")
 
         _write_cache(entities)
@@ -435,16 +450,21 @@ def screen_entity(name_or_imo: str, sanctions_list: SanctionsList) -> Optional[S
     if not raw:
         return None
 
-    # 1 — IMO (strongest, unique). Only when the query *is* an IMO.
-    imo = _normalize_imo(raw)
+    # 1 — IMO (strongest, unique). Only when the query genuinely IS an IMO: a
+    # bare 7-digit string OR an explicit "IMO 1234567" token. NOT any free text
+    # that merely CONTAINS 7 digits — otherwise a company whose name/owner embeds
+    # a sanctioned vessel's IMO ("ACME LOGISTICS 9176187") false-positives as
+    # sanctioned (review HIGH). The digit-strip fallback is reserved for cleaning
+    # fields already KNOWN to be IMOs (parse path / voyage.imo), never detection.
+    _im = _IMO_RE.search(raw)
+    imo = _im.group(1) if _im else (raw if raw.isdigit() and len(raw) == 7 else "")
     if imo:
         for e in sanctions_list.entities:
             if e.imo and e.imo == imo:
                 return ScreeningMatch(query=raw, matched_on="imo", entity=e)
-        # A pure IMO query that didn't hit any IMO is a clean miss — do NOT
-        # then fuzzy-name-match a 7-digit number.
-        if raw.isdigit():
-            return None
+        # An explicit-IMO query that didn't hit is a clean miss — do NOT then
+        # fall through to fuzzy-name-match a bare 7-digit number.
+        return None
 
     # 2 — exact normalized-name equality.
     qn = normalize_name(raw)

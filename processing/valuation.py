@@ -931,14 +931,14 @@ def fundamentals_to_valuation_inputs(
 
     kwargs: dict = {}
     real_fields: list[str] = []
-    notes: list[str] = []
 
-    # fcf_0 ← EBITDA proxy (real, measured — but a proxy for FCF).
-    ebitda = _av_real(data.get("ebitda"))
-    if ebitda is not None:
-        kwargs["fcf_0"] = ebitda
-        real_fields.append("fcf_0")
-        notes.append("fcf_0 set from real AV EBITDA as an FCF proxy.")
+    # fcf_0 is DELIBERATELY left at the assumed default (review): AV EBITDA is
+    # (a) a PROXY for FCF, not measured FCF — stamping it 'real' overstated its
+    # provenance; (b) a single-QUARTER figure that an annual DCF would read ~4×
+    # too small; and (c) raw USD where fcf_0 expects MILLIONS (~1e6× off). The
+    # real EBITDA still surfaces as a labeled fundamental in the company profile;
+    # it does NOT masquerade as a measured annual FCF in the DCF. Only the clean,
+    # unit-safe mappings below (growth, share count) are stamped 'real'.
 
     # fcf_growth ← measured YoY growth (percent → fraction).
     growth_pct = data.get("revenue_growth_yoy_pct")
