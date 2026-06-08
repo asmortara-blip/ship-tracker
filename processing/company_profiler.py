@@ -108,6 +108,73 @@ COMPANY_PROFILES = {
 }
 
 
+# ─── R047: REAL Alpha Vantage fundamentals (cache-only, offline-safe) ────────
+# A single localized block (this helper + one call site in
+# compute_company_profiles). It NEVER triggers a live AV fetch on the hot path:
+# it serves the cached OVERVIEW/INCOME only when one is already on disk, so a
+# profile render can't blow Alpha Vantage's 25-requests/day free-tier quota.
+# When the cache is dark (no key / never fetched) it returns {} and the profile
+# keeps its hardcoded/assumed values. Every value it DOES return is real, and is
+# flagged via the `*_provenance` keys so the UI can tell measured from assumed.
+
+# Alpha Vantage OVERVIEW is cached for 24h; serve a vintage up to this old.
+_AV_PROFILE_CACHE_TTL_H: float = 24.0
+
+
+def _av_fundamentals(ticker: str) -> dict:
+    """Return REAL Alpha Vantage fundamentals for *ticker*, CACHE-ONLY.
+
+    Reads the already-cached OVERVIEW (and INCOME) for *ticker* and returns a
+    small dict of measured figures (market cap, P/E, dividend yield, beta,
+    EBITDA, YoY growth, price). Returns ``{}`` when nothing is cached, when no
+    API key is configured, or on any error — so the caller falls back to the
+    hardcoded/assumed profile. NEVER forces a live fetch (offline-safe).
+    """
+    try:
+        from data.alphavantage_feed import (
+            alphavantage_available,
+            fetch_fundamentals,
+            fetch_income,
+        )
+        from data.cache_manager import CacheManager
+
+        if not alphavantage_available():
+            return {}
+
+        cache = CacheManager()
+        out: dict = {}
+
+        # OVERVIEW — only read when a fresh cache entry already exists. Passing
+        # the same TTL fetch_fundamentals uses means is_cached() agreeing → the
+        # subsequent fetch is a guaranteed cache hit, never a network call.
+        ov_key = f"alphavantage_{ticker}_OVERVIEW"
+        if cache.is_cached(ov_key, source="alphavantage", ttl_hours=_AV_PROFILE_CACHE_TTL_H):
+            fund = fetch_fundamentals(ticker, cache_ttl_hours=_AV_PROFILE_CACHE_TTL_H, cache=cache)
+            if fund is not None:
+                if fund.market_cap > 0:
+                    out["market_cap_bn"] = float(fund.market_cap)
+                if fund.pe_ratio > 0:
+                    out["pe_ratio"] = float(fund.pe_ratio)
+                if fund.dividend_yield_pct > 0:
+                    out["dividend_yield_pct"] = float(fund.dividend_yield_pct)
+                if fund.beta != 0:
+                    out["beta"] = float(fund.beta)
+                if fund.revenue_growth_yoy_pct != 0:
+                    out["revenue_growth_yoy_pct"] = float(fund.revenue_growth_yoy_pct)
+
+        # INCOME — same cache-only discipline for the EBITDA figure.
+        inc_key = f"alphavantage_{ticker}_INCOME_STATEMENT"
+        if cache.is_cached(inc_key, source="alphavantage", ttl_hours=_AV_PROFILE_CACHE_TTL_H):
+            income = fetch_income(ticker, cache_ttl_hours=_AV_PROFILE_CACHE_TTL_H, cache=cache)
+            if income is not None and income.ebitda > 0:
+                out["ebitda"] = float(income.ebitda)
+
+        return out
+    except Exception as exc:  # noqa: BLE001 — a feed/cache hiccup must never break a profile
+        logger.debug("AV fundamentals unavailable for %s (using assumed): %s", ticker, exc)
+        return {}
+
+
 def compute_company_profiles(stock_data: dict) -> list[dict]:
     """Compute detailed profiles for all tracked shipping companies.
 
@@ -120,6 +187,22 @@ def compute_company_profiles(stock_data: dict) -> list[dict]:
             "ticker": ticker,
             **master,
         }
+
+        # ─── R047: overlay REAL AV fundamentals when cached (else assumed) ───
+        # Self-contained block: reads cache-only AV figures and stamps each one
+        # 'real'. Keys absent from `av` keep the hardcoded/assumed profile and
+        # are flagged 'assumed' via fundamentals_provenance. No live fetch.
+        av = _av_fundamentals(ticker)
+        fund_prov: dict[str, str] = {}
+        for _field in ("market_cap_bn", "pe_ratio", "dividend_yield_pct",
+                       "beta", "ebitda", "revenue_growth_yoy_pct"):
+            if _field in av:
+                profile[_field] = av[_field]
+                fund_prov[_field] = "real"
+            else:
+                fund_prov[_field] = "assumed"
+        profile["fundamentals_provenance"] = fund_prov
+        profile["has_real_fundamentals"] = any(v == "real" for v in fund_prov.values())
 
         df = stock_data.get(ticker)
         if df is not None and isinstance(df, pd.DataFrame) and not df.empty and "close" in df.columns:
