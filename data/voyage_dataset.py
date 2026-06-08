@@ -143,6 +143,22 @@ class Voyage:
     # The per-route congestion *state* (days) this voyage's delay was drawn
     # around — exposes the serial-correlation structure to consumers/tests.
     route_congestion_state: float = 0.0
+    # ── Vessel particulars (R126) — MODELED / ILLUSTRATIVE, NOT a real registry ─
+    # These are *deterministically derived from the vessel name* (see
+    # ``derive_vessel_particulars``): the SAME vessel always resolves to the
+    # SAME particulars, on every voyage and across calls. They are synthetic —
+    # the IMO is structurally valid (7 digits + check digit) but does NOT
+    # correspond to any real ship; flag/owner/class/P&I are modeled, never
+    # observed registry data. Defaults keep existing Voyage(...) construction
+    # working; ``build_voyage_fleet`` populates them per vessel.
+    imo: str = ""                   # synthetic 7-digit IMO number (check-digit valid)
+    owner_id: str = ""              # modeled beneficial-owner group id
+    manager_id: str = ""            # modeled ship-manager / operator id
+    flag: str = ""                  # flag state, drawn from data.aisstream_feed._FLAGS
+    build_year: int = 0             # modeled year of build
+    gross_tonnage: int = 0          # modeled gross tonnage (GT)
+    class_society: str = ""         # modeled classification society
+    p_and_i_club: str = ""          # modeled P&I club
 
 
 # ── Provenance ───────────────────────────────────────────────────────────────
@@ -152,6 +168,124 @@ VOYAGE_DATA_SOURCE: DataSource = DataSource.modeled(
     notes="Synthetic voyages on real route geometry; delays biased by live "
     "chokepoint + weather disruptions.",
 )
+
+
+# ── Vessel particulars (R126) — MODELED, NOT a real registry ─────────────────
+# Reference pools for the deterministically-derived particulars. The class
+# societies and P&I clubs are real-world *names* used only as a plausible
+# label set; the assignment of any vessel to any of them is SYNTHETIC and must
+# never be read as an observed registry fact.
+_CLASS_SOCIETIES: tuple[str, ...] = (
+    "Lloyd's Register", "DNV", "ABS", "Bureau Veritas", "ClassNK",
+    "RINA", "Korean Register", "China Classification Society",
+)
+_PANDI_CLUBS: tuple[str, ...] = (
+    "Gard", "UK P&I Club", "Steamship Mutual", "North Standard",
+    "Skuld", "Britannia", "The Swedish Club", "West of England",
+    "Japan P&I Club", "American Club",
+)
+# Modeled owner / manager group labels. These are invented group identifiers,
+# NOT real shipping companies, to keep the synthetic provenance unambiguous.
+_OWNER_GROUPS: tuple[str, ...] = (
+    "OWN-ALPHA", "OWN-BRAVO", "OWN-CHARLIE", "OWN-DELTA", "OWN-ECHO",
+    "OWN-FOXTROT", "OWN-GOLF", "OWN-HOTEL", "OWN-INDIA", "OWN-JULIET",
+    "OWN-KILO", "OWN-LIMA",
+)
+_MANAGER_GROUPS: tuple[str, ...] = (
+    "MGR-NORTH", "MGR-SOUTH", "MGR-EAST", "MGR-WEST", "MGR-CENTRAL",
+    "MGR-COASTAL", "MGR-PACIFIC", "MGR-ATLANTIC",
+)
+
+# Plausible build-year window for the modeled fleet.
+_BUILD_YEAR_MIN = 2004
+_BUILD_YEAR_MAX = 2023
+
+# Per-vessel-type gross-tonnage bands (GT). Container ships are the largest;
+# bulk carriers and tankers run somewhat smaller in this modeled fleet.
+_GT_BAND: dict[str, tuple[int, int]] = {
+    "Container":    (90_000, 235_000),
+    "Bulk Carrier": (30_000, 210_000),
+    "Tanker":       (55_000, 320_000),
+}
+_GT_BAND_DEFAULT = (20_000, 120_000)
+
+# Provenance for the derived particulars master. MODELED, never a live feed.
+VESSEL_PARTICULARS_SOURCE: DataSource = DataSource.modeled(
+    "Modeled Vessel Particulars (R126)",
+    notes="Synthetic, deterministically derived per vessel name; IMO is "
+    "structurally valid but fabricated. NOT a real vessel registry — "
+    "illustrative fleet/owner/flag attributes only.",
+)
+
+
+def _vessel_name_key(vessel_name: str) -> int:
+    """Stable, process-independent integer hash of a vessel name.
+
+    ``hash()`` is salted per-process, so we roll our own deterministic
+    digest (FNV-1a over the UTF-8 bytes). The same name therefore yields the
+    same key in every process / run — the bedrock of "same vessel → same
+    particulars".
+    """
+    h = 0x811C9DC5  # FNV offset basis (32-bit)
+    for b in vessel_name.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF  # FNV prime, 32-bit wrap
+    return h
+
+
+def _imo_for_key(key: int) -> str:
+    """Build a structurally valid 7-digit IMO number from a stable key.
+
+    An IMO number is 6 base digits plus a check digit. The check digit is the
+    units digit of (7*d1 + 6*d2 + 5*d3 + 4*d4 + 3*d5 + 2*d6). We derive the
+    6 base digits deterministically from ``key`` and append the correct check
+    digit so the result passes IMO validation — while being entirely synthetic.
+    """
+    base = key % 1_000_000  # six base digits, 000000..999999
+    digits = [int(c) for c in f"{base:06d}"]
+    weights = (7, 6, 5, 4, 3, 2)
+    check = sum(w * d for w, d in zip(weights, digits)) % 10
+    return f"{base:06d}{check}"
+
+
+def derive_vessel_particulars(vessel_name: str, vessel_type: str = "") -> dict:
+    """Deterministically derive a vessel's MODELED particulars from its name.
+
+    Pure + deterministic: the SAME ``vessel_name`` always returns the SAME
+    particulars, in any process, on any voyage. ``vessel_type`` only refines
+    the gross-tonnage band; it does not change the IMO/flag/owner identity, so
+    a name that appears under different types still keeps a stable IMO.
+
+    Returns a dict with: ``imo``, ``owner_id``, ``manager_id``, ``flag``,
+    ``build_year``, ``gross_tonnage``, ``class_society``, ``p_and_i_club``.
+
+    SYNTHETIC / ILLUSTRATIVE — see ``VESSEL_PARTICULARS_SOURCE``. The IMO is
+    structurally valid but fabricated; nothing here is observed registry data.
+    """
+    key = _vessel_name_key(vessel_name)
+    # A dedicated RNG seeded by the stable name key → stable draws per vessel.
+    rng = random.Random(key)
+
+    imo = _imo_for_key(key)
+    flag = _FLAGS[rng.randrange(len(_FLAGS))]
+    owner_id = _OWNER_GROUPS[rng.randrange(len(_OWNER_GROUPS))]
+    manager_id = _MANAGER_GROUPS[rng.randrange(len(_MANAGER_GROUPS))]
+    class_society = _CLASS_SOCIETIES[rng.randrange(len(_CLASS_SOCIETIES))]
+    p_and_i_club = _PANDI_CLUBS[rng.randrange(len(_PANDI_CLUBS))]
+    build_year = rng.randint(_BUILD_YEAR_MIN, _BUILD_YEAR_MAX)
+    gt_lo, gt_hi = _GT_BAND.get(vessel_type, _GT_BAND_DEFAULT)
+    # Round GT to the nearest 100 for a tidier modeled figure.
+    gross_tonnage = int(round(rng.randint(gt_lo, gt_hi) / 100.0) * 100)
+
+    return {
+        "imo": imo,
+        "owner_id": owner_id,
+        "manager_id": manager_id,
+        "flag": flag,
+        "build_year": build_year,
+        "gross_tonnage": gross_tonnage,
+        "class_society": class_society,
+        "p_and_i_club": p_and_i_club,
+    }
 
 
 # ── Great-circle geometry ────────────────────────────────────────────────────
@@ -359,6 +493,13 @@ def build_voyage_fleet(
             name_pool = _vessel_name_pool(vessel_type)
             vessel_name = name_pool[rng.randrange(len(name_pool))]
 
+            # ── Vessel particulars (R126) — MODELED, stable per vessel ──────
+            # Derived from the vessel NAME (not the per-route rng), so the same
+            # vessel resolves to the same IMO/flag/owner on every voyage and in
+            # every process. Synthetic; never a real registry. See
+            # ``derive_vessel_particulars``.
+            particulars = derive_vessel_particulars(vessel_name, vessel_type)
+
             # MMSI — 9-digit, deterministic per voyage.
             mmsi = str(200_000_000 + (seed + r_idx * 97 + v_idx * 13) % 599_999_999)
 
@@ -463,6 +604,14 @@ def build_voyage_fleet(
                     chokepoints_on_route=chokepoints_on_route,
                     chokepoint_severity=choke_severity,
                     route_congestion_state=round(route_state, 2),
+                    imo=particulars["imo"],
+                    owner_id=particulars["owner_id"],
+                    manager_id=particulars["manager_id"],
+                    flag=particulars["flag"],
+                    build_year=particulars["build_year"],
+                    gross_tonnage=particulars["gross_tonnage"],
+                    class_society=particulars["class_society"],
+                    p_and_i_club=particulars["p_and_i_club"],
                 )
             )
 
