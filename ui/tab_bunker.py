@@ -511,6 +511,34 @@ def _net_freight_panel(freight_data=None, macro_data=None, route_results=None) -
             )
 
         # ── 'Gross up, net down' divergence over a 30-obs window per route.
+        # DATE-ALIGN the crude anchor to each route's gross window-START (vs the
+        # latest print) so a rising fuel cost over the window can actually eat
+        # the rally and fire the alert. With the same crude at both ends the fuel
+        # leg is constant and net_change==gross_change, making the alert
+        # mathematically unreachable (review) — so we read the real crude AS OF
+        # the window-start date from the FRED history. When crude is dark or has
+        # no history the check stays honestly inert.
+        import pandas as pd
+
+        crude_hist = None
+        for _sid in ("DCOILWTICO", "DCOILBRENTEU"):
+            _cs = macro_data.get(_sid) if macro_data else None
+            if isinstance(_cs, pd.DataFrame) and {"date", "value"} <= set(_cs.columns):
+                _cs = _cs.dropna(subset=["value"]).copy()
+                _cs["date"] = pd.to_datetime(_cs["date"], errors="coerce")
+                _cs = _cs.dropna(subset=["date"]).sort_values("date")
+                if not _cs.empty:
+                    crude_hist = _cs
+                    break
+
+        def _crude_at(dt):
+            """Real crude at-or-before ``dt``; else the latest print (inert)."""
+            if crude_hist is not None and dt is not None and pd.notna(dt):
+                prior = crude_hist[crude_hist["date"] <= dt]
+                if not prior.empty:
+                    return float(prior["value"].iloc[-1])
+            return crude
+
         diverged = []
         for rid in sorted(gross_by_route):
             df = freight_data.get(rid)
@@ -523,13 +551,17 @@ def _net_freight_panel(freight_data=None, macro_data=None, route_results=None) -
                 window = min(30, len(rates) - 1)
                 gross_start = float(rates.iloc[-(window + 1)])
                 gross_end = float(rates.iloc[-1])
-                # Same crude both ends here (we only have the latest print);
-                # the divergence is then driven purely by the gross path vs
-                # the (constant-crude) fuel leg. Still surfaces a rally that
-                # fails to lift net at the current fuel cost.
+                start_dt = None
+                if "date" in getattr(df, "columns", []):
+                    try:
+                        start_dt = pd.to_datetime(
+                            df["date"], errors="coerce").iloc[-(window + 1)]
+                    except Exception:
+                        start_dt = None
                 dv = net_freight_divergence(
                     rid, gross_start, gross_end,
-                    crude_start_usd_per_bbl=crude, crude_end_usd_per_bbl=crude,
+                    crude_start_usd_per_bbl=_crude_at(start_dt),
+                    crude_end_usd_per_bbl=crude,
                 )
                 if dv.diverged:
                     name = ROUTES_BY_ID[rid].name if rid in ROUTES_BY_ID else rid
