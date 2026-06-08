@@ -672,6 +672,25 @@ def _render_hotspot_monitor() -> None:
 # Section 4 — Sanctions & Embargo Tracker
 # ---------------------------------------------------------------------------
 
+def _try_live_geo_sanctions():
+    """Attempt a live OFAC SDN screen (R024). OFFLINE-SAFE — never raises.
+
+    Returns ``(rows, source)`` in this tab's row shape when the live OFAC
+    consolidated list parsed (REAL provenance), else ``(None, None)`` so the
+    caller keeps its modeled ``_SANCTIONS`` rows.
+    """
+    try:
+        from data.sanctions_feed import fetch_ofac_sdn, geopolitical_sanctions_rows
+        sl = fetch_ofac_sdn()
+        if sl and sl.is_real:
+            rows = geopolitical_sanctions_rows(sl)
+            if rows:
+                return rows, sl.source
+    except Exception:
+        logger.debug("[tab_geopolitical] live OFAC screen unavailable — modeled fallback")
+    return None, None
+
+
 def _render_sanctions_tracker() -> None:
     try:
         section_header(
@@ -679,9 +698,27 @@ def _render_sanctions_tracker() -> None:
             "Active shipping-relevant sanctions by country/entity — compliance critical",
         )
 
-        if not _SANCTIONS:
+        # ── R024: prefer a LIVE OFAC SDN screen when the keyless feed returns;
+        # fall back to the modeled rows (clearly labelled) when dark. ──────────
+        live_rows, live_source = _try_live_geo_sanctions()
+        is_live = live_rows is not None
+        sanctions_data = live_rows if is_live else _SANCTIONS
+
+        if not sanctions_data:
             st.info("No active sanctions to display.")
             return
+
+        if is_live:
+            from ui.styles import live_data_badge
+            st.markdown(
+                "Live OFAC SDN vessel designations grouped by sanctions program. "
+                + live_data_badge(live_source),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(
+                "Demo data — live OFAC SDN feed offline; modeled reference rows shown."
+            )
 
         rows = [
             [
@@ -692,12 +729,14 @@ def _render_sanctions_tracker() -> None:
                 _sans(row["effective"], color=C_TEXT3),
                 _sans(row["notes"], color=C_TEXT2),
             ]
-            for row in _SANCTIONS
+            for row in sanctions_data
         ]
         wsj_market_table(
             ["Entity", "Sanctioning Body", "Asset Type", "Ships Affected", "Effective", "Compliance Notes"],
             rows,
         )
+        if is_live:
+            st.markdown(source_footer([live_source]), unsafe_allow_html=True)
 
     except Exception as exc:
         logger.warning(f"[tab_geopolitical] sanctions_tracker: {exc}")

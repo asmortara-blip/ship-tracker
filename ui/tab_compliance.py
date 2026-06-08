@@ -527,16 +527,54 @@ def _section_1_dashboard() -> None:
         st.error("Dashboard unavailable.")
 
 
+def _try_live_sanctions():
+    """Attempt a live OFAC SDN screen (R024). OFFLINE-SAFE — never raises.
+
+    Returns ``(rows, source)`` when the live consolidated list parsed (REAL
+    provenance), else ``(None, None)`` so the caller keeps its modeled rows. The
+    feed is cache-backed + offline-safe; a failure here must degrade silently.
+    """
+    try:
+        from data.sanctions_feed import fetch_ofac_sdn, sanctions_rows
+        sl = fetch_ofac_sdn()
+        if sl and sl.is_real:
+            rows = sanctions_rows(sl)
+            if rows:
+                return rows, sl.source
+    except Exception:
+        logger.debug("compliance: live OFAC screen unavailable — modeled fallback", exc_info=True)
+    return None, None
+
+
 def _section_2_sanctions_table() -> None:
     try:
+        # ── R024: prefer a LIVE OFAC SDN screen when the keyless feed returns;
+        # fall back to the modeled rows (clearly labelled) when dark. ──────────
+        live_rows, live_source = _try_live_sanctions()
+        is_live = live_rows is not None
+
         severity_filter = st.selectbox(
             "Filter by severity",
             ["All", "Critical", "High", "Moderate"],
             key="sanct_severity_filter",
         )
-        rows_data = _SANCTIONS_ROWS
+        rows_data = live_rows if is_live else _SANCTIONS_ROWS
         if severity_filter != "All":
             rows_data = [r for r in rows_data if r["severity"] == severity_filter.lower()]
+
+        if is_live:
+            from ui.styles import live_data_badge
+            st.markdown(
+                "Live screen against the U.S. Treasury OFAC SDN consolidated "
+                f"list ({len(live_rows)} vessel designations shown). "
+                + live_data_badge(live_source),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(
+                "ILLUSTRATIVE — live OFAC SDN feed offline; showing modeled "
+                "reference rows, not a live screen."
+            )
 
         headers = [
             "Jurisdiction", "Sanctioned Entities", "Vessel Types",
@@ -555,12 +593,15 @@ def _section_2_sanctions_table() -> None:
             for r in rows_data
         ]
         wsj_market_table(headers, rows)
-        st.markdown(source_footer([
-            {"name": "OFAC SDN List",       "kind": "modeled", "quality": "demo"},
-            {"name": "EUR-Lex OJ",          "kind": "modeled", "quality": "demo"},
-            {"name": "UK OFSI",             "kind": "modeled", "quality": "demo"},
-            {"name": "UN SC Resolutions",   "kind": "modeled", "quality": "demo"},
-        ]), unsafe_allow_html=True)
+        if is_live:
+            st.markdown(source_footer([live_source]), unsafe_allow_html=True)
+        else:
+            st.markdown(source_footer([
+                {"name": "OFAC SDN List",       "kind": "modeled", "quality": "demo"},
+                {"name": "EUR-Lex OJ",          "kind": "modeled", "quality": "demo"},
+                {"name": "UK OFSI",             "kind": "modeled", "quality": "demo"},
+                {"name": "UN SC Resolutions",   "kind": "modeled", "quality": "demo"},
+            ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Sanctions table error")
         st.error("Sanctions table unavailable.")

@@ -61,6 +61,32 @@ def _gdelt_offline_by_default(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _live_feeds_offline_by_default(monkeypatch, tmp_path):
+    """No test makes a REAL OFAC-sanctions or Open-Meteo-marine call OR reads the
+    on-disk cache. The Compliance / Geopolitical tab renders call fetch_ofac_sdn()
+    with http_get=None, so a tab-smoke on a cold cache would otherwise pull the
+    real ~8MB OFAC SDN list over the network (slow + flaky). Neutralize the live
+    ``requests`` path + cache dir for both new feeds; the feeds' own tests inject
+    ``http_get`` / set their own ``_CACHE_DIR`` so they override this. (Same R014
+    lesson as the GDELT fixture above.)"""
+    class _NoNet:
+        @staticmethod
+        def get(*_a, **_k):
+            raise ConnectionError("live feed network disabled in tests")
+
+    for mod_name, cache_sub in (("data.sanctions_feed", "sanctions_cache"),
+                                ("data.marine_weather_feed", "marine_cache")):
+        try:
+            mod = __import__(mod_name, fromlist=["_CACHE_DIR"])
+            monkeypatch.setattr(mod, "requests", _NoNet, raising=False)
+            monkeypatch.setattr(mod, "_CACHE_DIR", tmp_path / cache_sub,
+                                raising=False)
+        except Exception:
+            pass
+    yield
+
+
 @pytest.fixture
 def block_network(monkeypatch):
     """Fail every outbound TCP connection instantly.
