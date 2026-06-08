@@ -783,7 +783,11 @@ def build_ledger_validation_report(
     # is the fraction that fell. Comparing a bearish tier's hit-rate to the
     # always-LONG (up) rate would be apples-to-oranges and systematically
     # overstate it — so each signal is scored against its own directional drift.
-    raw = [(m["current_close"] - m["issue_close"]) / m["issue_close"] for m in marks]
+    # Use the ledger's SPLIT-SAFE forward price move (return_pct = the UNDIRECTED
+    # total return × 100, R127) rather than recomputing (current_close -
+    # issue_close)/issue_close off RAW closes — a split between issue and mark
+    # would otherwise flip a name's up/down vote and bias the drift baseline.
+    raw = [m["return_pct"] / 100.0 for m in marks]
     n_raw = len(raw)
     up_rate = sum(1 for r in raw if r > 0) / n_raw
     down_rate = sum(1 for r in raw if r < 0) / n_raw

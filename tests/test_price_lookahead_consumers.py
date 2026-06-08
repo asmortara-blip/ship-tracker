@@ -296,3 +296,28 @@ def test_signal_ledger_forward_return_split_safe() -> None:
     r_legacy = signal_ledger._signed_forward_return(
         {"ZIM": _legacy_frame()}, "ZIM", issue_date, issue_close, cur_nosplit)
     assert r_legacy == pytest.approx((cur_nosplit - issue_close) / issue_close, abs=1e-12)
+
+
+def test_investor_report_30d_change_is_split_artifact_free() -> None:
+    """The R127 re-review HIGH: investor_report_engine._stock_change_30d must ride
+    the adjusted basis so a split INSIDE the trailing-30d window isn't a fake
+    ~-50% change. Build a frame with a 2:1 split ~15 rows from the end."""
+    from processing.investor_report_engine import _stock_change_30d
+
+    n, split_at = 45, 30
+    path = 100.0 * np.exp(np.cumsum(np.full(n, 0.002)))
+    raw = path.copy(); raw[split_at:] = raw[split_at:] / 2.0
+    adj = np.ones(n); adj[split_at:] = 2.0
+    dates = pd.date_range("2025-01-01", periods=n, freq="B")
+    split = {"ZIM": pd.DataFrame({"date": dates, "symbol": "ZIM",
+                                  "close": raw, "adj_factor": adj})}
+    nosplit = {"ZIM": pd.DataFrame({"date": dates, "symbol": "ZIM",
+                                    "close": path, "adj_factor": np.ones(n)})}
+    # adjusted: split frame matches the un-split total-return path (no artifact)
+    assert abs(_stock_change_30d(split, "ZIM")
+               - _stock_change_30d(nosplit, "ZIM")) < 1e-6
+    # legacy frame (no adj_factor) would still show the large split artifact —
+    # proving the fix is load-bearing.
+    legacy = {"ZIM": pd.DataFrame({"date": dates, "symbol": "ZIM", "close": raw})}
+    assert abs(_stock_change_30d(legacy, "ZIM")
+               - _stock_change_30d(nosplit, "ZIM")) > 10.0

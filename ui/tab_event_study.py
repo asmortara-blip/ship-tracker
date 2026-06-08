@@ -113,6 +113,16 @@ def _close_series_from_frame(frame) -> pd.Series | None:
         selected = selected.iloc[:, 0]
     values = pd.to_numeric(selected, errors="coerce")
 
+    # R127: the event study measures cumulative RETURNS over a [-pre,+post]
+    # window, so an equity frame's RAW 'close' must ride the look-ahead-free
+    # total-return basis (close * adj_factor) — else a split/large dividend
+    # inside the window injects a spurious ~50% cumulative move. Only the raw
+    # close columns are scaled (adj_close/Adj Close are already adjusted);
+    # adj_factor defaults to 1.0 so fixtures/non-equity frames are unchanged.
+    if col in ("close", "Close", "price") and "adj_factor" in frame.columns:
+        adj = pd.to_numeric(frame["adj_factor"], errors="coerce").fillna(1.0)
+        values = values * adj.reindex(values.index).fillna(1.0)
+
     # Prefer the frame's own index for dates; if it is not datetime-like, look
     # for an explicit 'date' column before giving up.
     index = frame.index

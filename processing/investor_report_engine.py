@@ -431,7 +431,13 @@ def _latest_stock_price(stock_data: dict, ticker: str) -> float:
 
 
 def _stock_change_30d(stock_data: dict, ticker: str) -> float:
-    """Return 30-day percentage price change for a ticker, or 0.0."""
+    """Return 30-day percentage price change for a ticker, or 0.0.
+
+    A %-change over time → look-ahead-free TOTAL-RETURN basis (R127): the close
+    rides ``close * adj_factor`` so a split/large dividend in the trailing window
+    isn't read as a spurious ~-50%/+100% move. adj_factor defaults to 1.0 when
+    absent, so fixtures/legacy frames are unchanged. (_latest_stock_price stays
+    raw — it is the displayed price level.)"""
     try:
         df = stock_data.get(ticker)
         if df is None or df.empty or "close" not in df.columns:
@@ -439,7 +445,9 @@ def _stock_change_30d(stock_data: dict, ticker: str) -> float:
         df2 = df.copy()
         if "date" in df2.columns:
             df2 = df2.sort_values("date")
-        vals = df2["close"].dropna()
+        from data.normalizer import adjusted_close
+        df2 = df2.assign(_adj=adjusted_close(df2).values)
+        vals = df2["_adj"].dropna()
         if len(vals) < 2:
             return 0.0
         current = float(vals.iloc[-1])
@@ -448,7 +456,7 @@ def _stock_change_30d(stock_data: dict, ticker: str) -> float:
             mask = df2["date"] <= ref
             if not mask.any():
                 return 0.0
-            ago = float(df2.loc[mask, "close"].dropna().iloc[-1])
+            ago = float(df2.loc[mask, "_adj"].dropna().iloc[-1])
         else:
             idx = max(0, len(vals) - 31)
             ago = float(vals.iloc[idx])
