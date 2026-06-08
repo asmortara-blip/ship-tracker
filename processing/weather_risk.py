@@ -44,6 +44,12 @@ class WeatherRiskIndex:
     peak_risk_months: List[int]
     primary_risk_type: str
     historical_disruption_frequency_pct: float   # % of voyages disrupted historically
+    # R032 live-weather provenance. Defaults preserve today's modeled-almanac
+    # behaviour exactly: unless a caller opts in to a live marine reading (and
+    # one is actually available), the index is purely the static catalogue.
+    is_real: bool = False                        # True = a live marine reading was blended in
+    provenance: str = "modeled"                  # "modeled" | "blended"
+    modeled_risk_score: float | None = None      # the pre-blend almanac score (when blended)
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +662,13 @@ def _current_month() -> int:
 # Public API
 # ---------------------------------------------------------------------------
 
-def compute_route_weather_risk(route_id: str) -> WeatherRiskIndex:
+def compute_route_weather_risk(
+    route_id: str,
+    *,
+    live: bool = False,
+    live_score: float | None = None,
+    http_get=None,
+) -> WeatherRiskIndex:
     """Aggregate all WeatherRiskEvents affecting *route_id* into a WeatherRiskIndex.
 
     The composite risk score (0-1) is computed as:
@@ -669,10 +681,42 @@ def compute_route_weather_risk(route_id: str) -> WeatherRiskIndex:
 
     Annualised delay days = sum of (probability * delay_if_occurs * in_season_months/12).
 
+    Live-weather blend (R032 — OPT-IN, default OFF)
+    -----------------------------------------------
+    By DEFAULT (``live=False`` and ``live_score=None``) the result is the pure
+    modeled almanac — byte-for-byte identical to the pre-R032 behaviour, with no
+    network call. SSI (``processing.shipping_stress_index``) and every existing
+    test stay on this path, so offline behaviour is unchanged.
+
+    A caller may opt in to an OBSERVED current-weather reading from the keyless
+    Open-Meteo feed (``data.marine_weather_feed``):
+
+      * ``live_score`` — a pre-computed live score in [0, 1] (the testable seam;
+        no network). When provided it is blended directly.
+      * ``live=True`` — fetch the live score now via
+        ``marine_weather_feed.fetch_route_weather`` (uses the injectable
+        ``http_get`` for offline tests). A dark/failed feed yields ``None`` and
+        the modeled score is returned unchanged — never raises, never blocks.
+
+    Blend rule: **escalate-only** — ``current_risk_score = max(modeled, live)``.
+    A real observation can only RAISE the hazard above the climatological
+    baseline, never lower it below what the almanac already warns of (a calm
+    day does not erase a route's structural storm-season risk). When a live
+    score is actually blended, ``is_real`` becomes ``True``, ``provenance``
+    becomes ``"blended"``, and ``modeled_risk_score`` preserves the pre-blend
+    value for transparency.
+
     Parameters
     ----------
     route_id:
         One of the 17 canonical route IDs from route_registry.
+    live:
+        Opt-in: fetch a live marine reading for the route now. Default ``False``.
+    live_score:
+        Opt-in: a pre-computed live score in [0, 1] to blend (bypasses the
+        fetch). Takes precedence over ``live``. Default ``None``.
+    http_get:
+        Injectable getter forwarded to the live fetch (offline tests).
 
     Returns
     -------
@@ -729,19 +773,71 @@ def compute_route_weather_risk(route_id: str) -> WeatherRiskIndex:
     # Historical disruption frequency: average probability across events
     hist_freq = round(sum(ev.probability_pct for ev in events) / n, 1)
 
+    modeled_score = round(clamped_score, 4)
+
+    # ── R032 live-weather blend (OPT-IN; default path is a no-op) ───────────
+    final_score = modeled_score
+    is_real = False
+    provenance = "modeled"
+    modeled_for_index: float | None = None
+
+    blended_live = _resolve_live_score(
+        route_id, live=live, live_score=live_score, http_get=http_get
+    )
+    if blended_live is not None:
+        # Escalate-only: a real reading can only raise the hazard, never lower
+        # the climatological baseline.
+        final_score = round(min(1.0, max(modeled_score, blended_live)), 4)
+        is_real = True
+        provenance = "blended"
+        modeled_for_index = modeled_score
+
     idx = WeatherRiskIndex(
         route_id=route_id,
-        current_risk_score=round(clamped_score, 4),
+        current_risk_score=final_score,
         annualized_delay_days=round(annualized_days, 2),
         peak_risk_months=sorted(peak_months),
         primary_risk_type=primary_type,
         historical_disruption_frequency_pct=hist_freq,
+        is_real=is_real,
+        provenance=provenance,
+        modeled_risk_score=modeled_for_index,
     )
     logger.debug(
-        "compute_route_weather_risk({}): score={:.3f}, ann_delay={:.2f}d",
-        route_id, idx.current_risk_score, idx.annualized_delay_days,
+        "compute_route_weather_risk({}): score={:.3f} ({}), ann_delay={:.2f}d",
+        route_id, idx.current_risk_score, idx.provenance, idx.annualized_delay_days,
     )
     return idx
+
+
+def _resolve_live_score(
+    route_id: str,
+    *,
+    live: bool,
+    live_score: float | None,
+    http_get=None,
+) -> float | None:
+    """Return a live weather score in [0, 1] to blend, or ``None`` (default).
+
+    Precedence: an explicit ``live_score`` wins (the no-network testable seam);
+    otherwise ``live=True`` triggers a real fetch via
+    ``data.marine_weather_feed`` (offline-safe — a dark feed → ``None``).
+    OFFLINE-SAFE: any import/fetch error degrades to ``None`` (modeled-only),
+    never raises. The DEFAULT (``live=False``, ``live_score=None``) returns
+    ``None`` with no work, so the hot path is untouched."""
+    if live_score is not None:
+        try:
+            return max(0.0, min(1.0, float(live_score)))
+        except (TypeError, ValueError):
+            return None
+    if not live:
+        return None
+    try:
+        from data.marine_weather_feed import fetch_route_weather
+        return fetch_route_weather(route_id, http_get=http_get)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("live weather fetch degraded for {}: {}", route_id, exc)
+        return None
 
 
 def get_current_season_alerts() -> List[WeatherRiskEvent]:
