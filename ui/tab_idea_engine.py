@@ -63,6 +63,35 @@ def _conviction_color(label: str) -> str:
     )
 
 
+def _tradeability_color(verdict: str) -> str:
+    """Color a tradeability verdict — green tradeable, amber caution, red
+    untradeable, gray unknown."""
+    return {
+        "tradeable": C_HIGH,
+        "caution": C_MOD,
+        "untradeable": C_LOW,
+        "unknown": C_TEXT3,
+    }.get(verdict, C_TEXT3)
+
+
+def _screen_tradeability(ideas: list, stock_data) -> dict:
+    """Return ``{ticker: Tradeability}`` from a real-liquidity tradeability screen.
+
+    Wraps :func:`processing.tradeability.screen_ideas` in its own try/except so a
+    failure here only drops the annotation column — it never blanks the tab. An
+    empty dict means "no tradeability read available" and the UI shows an honest
+    'liquidity unknown' state.
+    """
+    try:
+        from processing.tradeability import screen_ideas
+
+        reads = screen_ideas(ideas, stock_data or {})
+        return {getattr(r, "ticker", ""): r for r in reads if getattr(r, "ticker", "")}
+    except Exception:
+        logger.exception("Idea Engine — tradeability screen failed")
+        return {}
+
+
 def _mono(value: str, color: str = C_TEXT) -> str:
     return (
         f'<span style="font-family:JetBrains Mono,monospace;color:{color};'
@@ -233,22 +262,29 @@ def _render_hero(top_idea, active_scenario) -> None:
 
 # ─── Section 2: Ranked ideas table with scenario overlay ────────────────────
 
-def _render_ranked_table(ideas: list, active_scenario) -> None:
+def _render_ranked_table(ideas: list, active_scenario, tradeability: dict | None = None) -> None:
     """Each row: rank, ticker, direction, conviction, base return, scenario-
-    adjusted return, Δ%, top driver. The scenario columns are populated only
-    when an active scenario is set."""
+    adjusted return, Δ%, tradeability, top driver. The scenario columns are
+    populated only when an active scenario is set; the Tradeability column shows
+    the liquidity tier badge so a thin High-conviction idea is visibly flagged."""
     if not ideas:
         return
+
+    tradeability = tradeability or {}
 
     section_header(
         "Ranked Trade Ideas",
         subtitle=(
             "Sorted by conviction. Right two columns reflect the active "
             "what-if scenario from the sidebar — Δ% is the return shock the "
-            "scenario applies to this ticker."
+            "scenario applies to this ticker. The Tradeability column gates "
+            "each idea on REAL dollar-volume liquidity (a thin High-conviction "
+            "idea is a trap)."
             if active_scenario else
-            "Sorted by conviction. Select a scenario in the sidebar to see "
-            "how each idea moves under a what-if shock."
+            "Sorted by conviction. The Tradeability column gates each idea on "
+            "REAL dollar-volume liquidity — a thin High-conviction idea is a "
+            "trap. Select a scenario in the sidebar to see how each idea moves "
+            "under a what-if shock."
         ),
     )
 
@@ -260,7 +296,7 @@ def _render_ranked_table(ideas: list, active_scenario) -> None:
     headers = ["#", "Ticker", "Direction", "Conviction", "Base 30d %"]
     if active_scenario is not None:
         headers += [f"Scenario {active_scenario.id} %", "Δ vs Base"]
-    headers += ["Top Driver"]
+    headers += ["Tradeability", "Top Driver"]
 
     rows: list[list[str]] = []
     for rank, idea in enumerate(ideas[:15], start=1):
@@ -302,17 +338,101 @@ def _render_ranked_table(ideas: list, active_scenario) -> None:
                     color=(C_HIGH if delta > 0 else (C_LOW if delta < 0 else C_TEXT3)),
                 ),
             ]
+        # Tradeability cell — liquidity tier badge + a crowding/short caveat tag.
+        read = tradeability.get(ticker)
+        if read is None:
+            trade_cell = _sans("liquidity unknown", color=C_TEXT3)
+        else:
+            verdict = getattr(read, "verdict", "unknown")
+            tier = getattr(read, "liquidity_tier", "unknown")
+            extra = []
+            if getattr(read, "is_crowded", False):
+                extra.append(f"crowded×{getattr(read, 'crowding_count', 1)}")
+            if getattr(read, "is_short", False) and getattr(read, "borrow_flag", ""):
+                extra.append(getattr(read, "borrow_flag"))
+            extra_txt = (
+                f' <span style="color:{C_TEXT3};font-size:0.72rem">'
+                f'({", ".join(extra)})</span>'
+                if extra else ""
+            )
+            trade_cell = (
+                badge(tier, color=_tradeability_color(verdict)) + extra_txt
+            )
+        row += [trade_cell]
         row += [_sans(top_driver, color=C_TEXT2)]
         rows.append(row)
 
     wsj_market_table(headers, rows)
+    st.caption(
+        "Tradeability gates each idea on REAL dollar-ADV (mean raw close × "
+        "volume); the short-borrow flag is a MODELED heuristic keyed off the "
+        "liquidity tier — not a live locate. 'liquidity unknown' means real "
+        "volume was dark for that name."
+    )
 
 
 # ─── Section 3: Per-idea cascade rationale (expanders) ──────────────────────
 
-def _render_rationale(ideas: list, limit: int = 5) -> None:
+def _render_tradeability_line(read) -> None:
+    """Render one idea's tradeability read inside its rationale expander.
+
+    A small bordered strip: the verdict + liquidity tier, the real dollar-ADV
+    and modeled max size, the crowding count, and (for shorts only) the MODELED
+    short-borrow flag. Honest 'liquidity unknown' when real volume was dark.
+    """
+    if read is None:
+        return
+    verdict = getattr(read, "verdict", "unknown")
+    color = _tradeability_color(verdict)
+    tier = getattr(read, "liquidity_tier", "unknown")
+    adv = getattr(read, "dollar_adv", None)
+    max_size = getattr(read, "max_size_usd", None)
+    crowding = getattr(read, "crowding_count", 1)
+    is_short = getattr(read, "is_short", False)
+    borrow_flag = getattr(read, "borrow_flag", "")
+
+    def _usd(v):
+        if v is None:
+            return "unknown"
+        v = float(v)
+        if v >= 1_000_000:
+            return f"${v / 1_000_000:.1f}M"
+        if v >= 1_000:
+            return f"${v / 1_000:.0f}K"
+        return f"${v:.0f}"
+
+    bits = []
+    if adv is None:
+        bits.append(f'<span style="color:{C_TEXT3}">liquidity unknown — '
+                    f'no real volume to measure</span>')
+    else:
+        bits.append(
+            f'{_usd(adv)}/day dollar-ADV · max modeled size {_usd(max_size)}'
+        )
+    if crowding and crowding > 1:
+        bits.append(f'crowding ×{crowding} on shared driver')
+    if is_short and borrow_flag:
+        bits.append(
+            f'short borrow <b>{borrow_flag}</b> '
+            f'<span style="color:{C_TEXT3}">(modeled heuristic, not a live '
+            f'locate)</span>'
+        )
+    st.markdown(
+        f'<div style="background:rgba(53,114,176,0.06);'
+        f'border-left:2px solid {color};padding:7px 12px;border-radius:3px;'
+        f'margin-bottom:10px;font-size:0.76rem;color:{C_TEXT2}">'
+        f'<span style="font-weight:700;color:{color};text-transform:uppercase;'
+        f'letter-spacing:0.06em;font-size:0.68rem">Tradeability: {verdict} '
+        f'· {tier}</span><br>'
+        f'{" · ".join(bits)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_rationale(ideas: list, limit: int = 5, tradeability: dict | None = None) -> None:
     if not ideas:
         return
+    tradeability = tradeability or {}
     section_header(
         "Cascade Rationale",
         subtitle=f"Full provenance for the top {min(limit, len(ideas))} ideas.",
@@ -327,6 +447,9 @@ def _render_rationale(ideas: list, limit: int = 5) -> None:
             f"{dot} {ticker} — {direction} · {conviction_label} ({conviction_score:.2f})",
             expanded=False,
         ):
+            # Tradeability read (liquidity / crowding / short-borrow) up top.
+            _render_tradeability_line(tradeability.get(ticker))
+
             # Thesis
             st.markdown(
                 f'<div style="font-size:0.82rem;line-height:1.5;color:{C_TEXT2};'
@@ -654,6 +777,11 @@ def render(
                 st.info("No equity ideas surfaced from the cascade. Try refreshing data.")
                 return
 
+            # ── Tradeability screen (REAL dollar-volume liquidity gate; R035) ─
+            # Computed once, reused by the ranked table and the rationale
+            # expanders. Own try/except inside the helper → never blanks the tab.
+            tradeability = _screen_tradeability(ideas, stock_data)
+
             # ── Conviction bars (overview before the detail table) ────────────
             try:
                 st.plotly_chart(
@@ -667,11 +795,11 @@ def render(
 
             # ── Ranked table ──────────────────────────────────────────────────
             section_divider("Ranked Table")
-            _render_ranked_table(ideas, scenario)
+            _render_ranked_table(ideas, scenario, tradeability)
 
             # ── Rationale (top 5 expanders) ───────────────────────────────────
             section_divider("Rationale")
-            _render_rationale(ideas, limit=5)
+            _render_rationale(ideas, limit=5, tradeability=tradeability)
 
             # ── Optimization mini ─────────────────────────────────────────────
             section_divider("Portfolio Construction")
@@ -743,7 +871,11 @@ def render(
                             "Cascade output from processing.disruption_cascade. "
                             "Scenario overlay from state.scenarios (sidebar-controlled). "
                             "Portfolio weights from engine.portfolio_optimizer over a "
-                            "synthetic 2-year return panel (seeded via stable_hash)."
+                            "synthetic 2-year return panel (seeded via stable_hash). "
+                            "Tradeability (processing.tradeability): dollar-ADV from "
+                            "REAL traded volume × raw close; short-borrow flag is a "
+                            "MODELED heuristic keyed off the liquidity tier, NOT a "
+                            "live locate."
                         ),
                     ),
                 ]),
