@@ -19,6 +19,12 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from processing.tariff_engine import (
+    TARIFF_POLICY_SOURCE,
+    US_CHINA_TARIFF_RATES_2025,
+    TariffImpact,
+    compute_default_tariff_impact,
+)
 from ui.styles import (
     _hex_to_rgba,
     C_ACCENT,
@@ -48,10 +54,10 @@ from ui.styles import (
 # projections. All flows shown are illustrative; demo pills make the
 # uncertainty explicit.
 
-_DS_TARIFF_POLICY = DataSource.modeled(
-    "USTR / MOFCOM tariff schedules",
-    notes="Tariff rates as announced April 2025; impact estimates modeled.",
-)
+# Tariff policy + computed-impact provenance comes from the engine itself
+# (curated dated rates → modeled VaR). Re-exported here so every section that
+# renders engine output stamps the same source.
+_DS_TARIFF_POLICY = TARIFF_POLICY_SOURCE
 _DS_TRADE_FLOWS = DataSource.modeled(
     "Trade flow diversion model",
     notes="Bilateral and rerouted flows projected from customs + AIS data.",
@@ -67,22 +73,6 @@ _DS_HISTORY = DataSource.modeled(
 )
 _DS_SCENARIO = DataSource.demo("De-escalation scenario (illustrative)")
 
-
-# ── Commodity data ─────────────────────────────────────────────────────────────
-_COMMODITIES = [
-    {"name": "Electronics",          "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn": 168, "tariff_burden_bn": 244, "shipping_impact": "HIGH",     "alt_sources": "Vietnam, India, Mexico"},
-    {"name": "Auto Parts",           "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":  54, "tariff_burden_bn":  78, "shipping_impact": "HIGH",     "alt_sources": "Mexico, South Korea, Germany"},
-    {"name": "Machinery",            "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn": 115, "tariff_burden_bn": 167, "shipping_impact": "HIGH",     "alt_sources": "Germany, Japan, South Korea"},
-    {"name": "Steel & Aluminum",     "us_tariff": "145% + 232%",    "cn_tariff": "—",    "us_imports_bn":  12, "tariff_burden_bn":  44, "shipping_impact": "HIGH",     "alt_sources": "Canada, Brazil, India"},
-    {"name": "Textiles & Apparel",   "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":  42, "tariff_burden_bn":  61, "shipping_impact": "HIGH",     "alt_sources": "Bangladesh, Vietnam, Cambodia"},
-    {"name": "Chemicals",            "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":  28, "tariff_burden_bn":  41, "shipping_impact": "MODERATE", "alt_sources": "Germany, India, Singapore"},
-    {"name": "Soybeans",             "us_tariff": "—",              "cn_tariff": "125%", "us_imports_bn":  14, "tariff_burden_bn":  18, "shipping_impact": "HIGH",     "alt_sources": "Brazil, Argentina (replacing US)"},
-    {"name": "LNG",                  "us_tariff": "—",              "cn_tariff": "125%", "us_imports_bn":   8, "tariff_burden_bn":  10, "shipping_impact": "MODERATE", "alt_sources": "Qatar, Australia, Russia"},
-    {"name": "Semiconductors",       "us_tariff": "Complex/phased", "cn_tariff": "125%", "us_imports_bn":  22, "tariff_burden_bn":  31, "shipping_impact": "MODERATE", "alt_sources": "Taiwan, South Korea, Netherlands"},
-    {"name": "Pharmaceuticals",      "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":   9, "tariff_burden_bn":  13, "shipping_impact": "LOW",      "alt_sources": "India, Ireland, Germany"},
-    {"name": "Furniture",            "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":  19, "tariff_burden_bn":  28, "shipping_impact": "MODERATE", "alt_sources": "Vietnam, Malaysia, Mexico"},
-    {"name": "Plastics",             "us_tariff": "145%",           "cn_tariff": "—",    "us_imports_bn":  16, "tariff_burden_bn":  23, "shipping_impact": "MODERATE", "alt_sources": "South Korea, Germany, Saudi Arabia"},
-]
 
 # ── Trade deal tracker data ────────────────────────────────────────────────────
 _TRADE_DEALS = [
@@ -127,28 +117,48 @@ def _impact_color(impact: str) -> str:
 
 
 # ── Section 1: Trade War Dashboard ────────────────────────────────────────────
-def _render_hero(macro_data: dict | None) -> None:
+def _render_hero(impact: TariffImpact) -> None:
     try:
         logger.debug("trade_war | rendering hero dashboard")
         page_header(
             title="Trade War Intelligence",
-            subtitle="US 145% / China 125% bilateral tariff regime — April 2025 escalation",
+            subtitle="US Section-301 + reciprocal tariff regime on Chinese goods — computed exposure",
             badge_text="TRADE WAR",
             badge_color=C_ACCENT,
         )
+
+        # Headline rates straight from the curated policy table — show the span,
+        # not a single embargo-level number, so the KPI matches the engine.
+        rates = US_CHINA_TARIFF_RATES_2025
+        lo, hi = (min(rates.values()), max(rates.values())) if rates else (0.0, 0.0)
+        rate_label = f"{lo:.0%}–{hi:.0%}" if abs(hi - lo) > 1e-9 else f"{hi:.0%}"
+
+        # Computed totals — the de-mocked figures. No hardcoded $244B / 214.
+        burden = impact.total_burden_bn
+        diverted = impact.total_diverted_bn
+        flow = impact.total_trade_value_bn
+        burden_pct = (burden / flow) if flow else 0.0
+
         metric_card_row(
             [
-                {"label": "US Tariff on China", "value": "145%",  "accent": C_LOW,    "sublabel": "All Chinese goods · Apr 2025"},
-                {"label": "China Retaliation",  "value": "125%",  "accent": C_MOD,    "sublabel": "All US goods · Apr 2025"},
-                {"label": "Est. Annual Impact", "value": "$582B", "accent": C_ACCENT, "delta": "-38% from 2024", "delta_color": C_LOW},
-                {"label": "Ships Rerouted",     "value": "214",   "accent": C_MOD,    "sublabel": "Last 30 days · transpacific"},
+                {"label": "US Tariff on China", "value": rate_label, "accent": C_LOW,
+                 "sublabel": "Stacked Section-301 + reciprocal · by category"},
+                {"label": "Tariffed Trade Flow", "value": f"${flow:,.0f}B", "accent": C_TEXT,
+                 "sublabel": "US goods imports from China (2024 base)"},
+                {"label": "Computed Tariff Burden", "value": f"${burden:,.0f}B", "accent": C_ACCENT,
+                 "delta": f"{burden_pct:.0%} of tariffed flow", "delta_color": C_LOW},
+                {"label": "Flow Diverting to Alt Origins", "value": f"${diverted:,.0f}B", "accent": C_HIGH,
+                 "sublabel": "Re-routing to Vietnam / Mexico / India"},
             ],
             columns=4,
         )
         st.caption(
-            "145% tariff = effective embargo on most goods · "
-            "trade is diverting to Vietnam, Mexico, India rather than disappearing · "
-            "transpacific bookings down 28% month-over-month."
+            "Tariff burden is COMPUTED — rate × China export-mix share × 2024 "
+            "US-imports-from-China base — not a fixed headline. Tariffs divert "
+            f"trade rather than eliminate it: ~${diverted:,.0f}B of the "
+            f"${burden:,.0f}B burden re-routes to lower-tariff origins; the "
+            f"remaining ${impact.total_direct_bn:,.0f}B is direct demand "
+            "destruction / pass-through on the China lane."
         )
         st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
     except Exception:
@@ -157,40 +167,109 @@ def _render_hero(macro_data: dict | None) -> None:
 
 
 # ── Section 2: Tariff Impact by Commodity ─────────────────────────────────────
-def _render_commodity_table() -> None:
+def _burden_impact_label(value_at_risk_bn: float) -> str:
+    """Bucket a computed per-commodity VaR into a shipping-impact tier."""
+    if value_at_risk_bn >= 30.0:
+        return "HIGH"
+    if value_at_risk_bn >= 12.0:
+        return "MODERATE"
+    return "LOW"
+
+
+def _render_commodity_table(impact: TariffImpact) -> None:
     try:
         logger.debug("trade_war | rendering commodity table")
         section_header(
             "Tariff Impact by Commodity",
-            "Full spectrum of affected goods — US 145% and China 125% retaliatory tariffs",
+            "Computed dollar value-at-risk per HS category — tariff rate × China "
+            "export share × 2024 US-imports base",
         )
+        if impact.is_empty:
+            st.info(
+                "No tariff impact could be computed — the curated rate table or "
+                "trade-share inputs were empty. Nothing fabricated."
+            )
+            st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
+            return
+
         rows = []
-        for c in _COMMODITIES:
-            us_col  = C_LOW if c["us_tariff"] != "—" else C_TEXT3
-            cn_col  = C_MOD if c["cn_tariff"] != "—" else C_TEXT3
-            impact  = c["shipping_impact"]
+        for c in impact.commodities:
+            tier = _burden_impact_label(c.value_at_risk_bn)
             rows.append([
-                _sans(c["name"], weight=700),
-                _mono(c["us_tariff"], color=us_col, weight=700),
-                _mono(c["cn_tariff"], color=cn_col, weight=700),
-                _mono(f"${c['us_imports_bn']}B"),
-                _mono(f"${c['tariff_burden_bn']}B", color=C_LOW, weight=600),
-                badge(impact, color=_impact_color(impact)),
-                _sans(c["alt_sources"], color=C_TEXT2, size="12px"),
+                _sans(c.category_label, weight=700),
+                _mono(f"{c.tariff_rate:.0%}", color=C_LOW, weight=700),
+                _mono(f"{c.trade_share:.0%}"),
+                _mono(f"${c.trade_value_bn:,.1f}B"),
+                _mono(f"${c.value_at_risk_bn:,.1f}B", color=C_LOW, weight=600),
+                _mono(f"${c.diverted_bn:,.1f}B", color=C_HIGH, weight=600),
+                badge(tier, color=_impact_color(tier)),
             ])
         wsj_market_table(
-            ["Commodity", "US Tariff on CN", "CN Tariff on US", "US Imports", "Tariff Burden", "Shipping Impact", "Alternative Sources"],
+            ["Commodity", "US Tariff on CN", "Share of Flow", "Trade Flow",
+             "Tariff Burden (VaR)", "Diverts to Alt Origins", "Shipping Impact"],
             rows,
         )
         st.caption(
-            "Shipping Impact key — HIGH: major route disruption / volume loss · "
-            "MODERATE: partial diversion, some resilience · "
-            "LOW: limited impact, inelastic demand."
+            f"Total computed burden ${impact.total_burden_bn:,.1f}B across "
+            f"{len(impact.commodities)} categories · "
+            "VaR = tariff rate × category trade flow · "
+            "Diverts = VaR × min(1, rate × elasticity) re-routing to "
+            "lower-tariff origins · Shipping Impact tiers the VaR magnitude."
         )
         st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
     except Exception:
         logger.exception("trade_war | commodity table failed")
         st.error("Commodity table failed to render.")
+
+
+# ── Section 2b: Per-Ticker Tariff Exposure ────────────────────────────────────
+def _render_ticker_exposure(impact: TariffImpact) -> None:
+    try:
+        logger.debug("trade_war | rendering ticker exposure table")
+        section_header(
+            "Shipping-Equity Tariff Exposure",
+            "Commodity burden rolled up to tracked carriers via the "
+            "company↔commodity weight matrix — diversion upside vs direct-lane drag",
+        )
+        if not impact.tickers:
+            st.info(
+                "No per-ticker exposure to compute — the company↔commodity "
+                "exposure matrix yielded no weighted overlap with the tariffed "
+                "categories."
+            )
+            st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
+            return
+
+        rows = []
+        for t in impact.tickers:
+            if t.direction == "Bullish":
+                dir_color = C_HIGH
+            elif t.direction == "Bearish":
+                dir_color = C_LOW
+            else:
+                dir_color = C_TEXT3
+            net_color = C_HIGH if t.net_bn > 0 else (C_LOW if t.net_bn < 0 else C_TEXT3)
+            rows.append([
+                _sans(t.ticker, weight=700),
+                _mono(f"${t.direct_exposure_bn:,.1f}B", color=C_LOW),
+                _mono(f"${t.diversion_upside_bn:,.1f}B", color=C_HIGH),
+                _mono(f"${t.net_bn:+,.1f}B", color=net_color, weight=700),
+                badge(t.direction, color=dir_color),
+            ])
+        wsj_market_table(
+            ["Carrier", "Direct-Lane Drag", "Diversion Upside", "Net", "Read"],
+            rows,
+        )
+        st.caption(
+            "Direct-lane drag = weighted share of the burden that stays on the "
+            "suppressed China lane (bearish) · Diversion upside = weighted share "
+            "that re-routes onto lanes the carrier can also serve (bullish) · "
+            "Net direction is illustrative, not investment advice."
+        )
+        st.markdown(source_footer([_DS_TARIFF_POLICY]), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("trade_war | ticker exposure table failed")
+        st.error("Ticker exposure table failed to render.")
 
 
 # ── Section 3: Trade Flow Diversion Map ───────────────────────────────────────
@@ -561,17 +640,36 @@ def _render_scenario() -> None:
 
 
 # ── Main render ────────────────────────────────────────────────────────────────
-def render(macro_data=None, freight_data=None, insights=None, *args, **kwargs) -> None:
-    """Render the Trade Policy & Tariff Impact Intelligence tab."""
+def render(*args, **kwargs) -> None:
+    """Render the Trade Policy & Tariff Impact Intelligence tab.
+
+    Dispatched from ``app.py`` positionally as
+    ``render(route_results, port_results, freight_data, macro_data, trade_data)``.
+    The hero + commodity + per-ticker sections are COMPUTED by
+    ``processing.tariff_engine`` from the curated dated US→China tariff table and
+    the platform's company-exposure matrix — they need no caller-supplied data,
+    so the inputs are accepted but not required. ``*args/**kwargs`` keeps the
+    signature tolerant of the positional dispatch and the smoke harness.
+    """
     # Lazy import keeps perf_telemetry off the tab-load critical path.
     from engine.perf_telemetry import track_render
-    
+
     with track_render('trade_war'):
         try:
             logger.info("trade_war | render start")
-            _render_hero(macro_data)
+            # Compute the tariff impact once; degrade to an empty result if the
+            # engine raises so the tab still renders honest empty-states.
+            try:
+                impact = compute_default_tariff_impact()
+            except Exception:
+                logger.exception("trade_war | tariff engine failed — empty impact")
+                impact = TariffImpact()
+
+            _render_hero(impact)
             section_divider("Tariff Exposure")
-            _render_commodity_table()
+            _render_commodity_table(impact)
+            section_divider("Equity Exposure")
+            _render_ticker_exposure(impact)
             section_divider("Flow Diversion")
             _render_diversion_map()
             section_divider("Supply-Chain Shift")
