@@ -674,6 +674,62 @@ def validate_signals(
     return report
 
 
+def load_point_in_time_stock_data(
+    tickers,
+    as_of_date,
+    *,
+    lookback_days: int = 180,
+    cache=None,
+) -> dict:
+    """Load ``{ticker -> DataFrame}`` AS IT WAS KNOWN on ``as_of_date`` (R110).
+
+    The point-in-time seam for a look-ahead-free validation run. Instead of
+    today's (possibly revised) price frames, this reads each ticker's bitemporal
+    vintage whose fetch_date <= ``as_of_date`` via
+    :meth:`CacheManager.load_as_of`, reconstructing the exact ``stock_data`` a
+    validator would have seen on that knowledge-date. It NEVER fetches and never
+    falls back to today's data — a ticker with no vintage as-known-then is simply
+    omitted (no look-ahead). The result drops straight into
+    :func:`build_validation_report` / :func:`validate_signals` unchanged.
+
+    This is **optional and default-off**: normal (non-backtest) reads never call
+    it, so the live UI path is untouched. It mirrors ``stock_feed.fetch_all_stocks``
+    key conventions (``key=f"{ticker}_{lookback_days}d"``, ``source="stocks"``)
+    so it reads the very vintages that feed wrote.
+
+    Parameters
+    ----------
+    tickers:
+        Iterable of ticker symbols to reconstruct.
+    as_of_date:
+        Knowledge-date (ISO ``YYYY-MM-DD`` string, ``date`` or ``datetime``).
+    lookback_days:
+        Must match the live fetch's lookback so the cache key lines up (the
+        ``stock_feed`` default is 180).
+    cache:
+        Optional ``CacheManager``; a default-rooted one is created if omitted.
+
+    Returns
+    -------
+    dict
+        ``ticker -> DataFrame`` for every ticker with a vintage as-known-then;
+        tickers without one are omitted. Empty dict on any failure (never raises).
+    """
+    try:
+        from data.cache_manager import CacheManager
+        cache = cache or CacheManager()
+        out: dict = {}
+        for symbol in (tickers or []):
+            key = f"{symbol}_{lookback_days}d"
+            df = cache.load_as_of(key, as_of_date, source="stocks")
+            if df is not None and not getattr(df, "empty", True):
+                out[symbol] = df
+        return out
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("load_point_in_time_stock_data: as-of read failed")
+        return {}
+
+
 def build_validation_report(
     stress_report,
     exposure_matrix,
@@ -699,7 +755,10 @@ def build_validation_report(
         ``list[CommodityExposure]`` (or ``None``) — passed through to the cascade
         scorer.
     stock_data:
-        Mapping ``ticker -> DataFrame`` of synthetic price history.
+        Mapping ``ticker -> DataFrame`` of synthetic price history. For a
+        look-ahead-free point-in-time run, build this with
+        :func:`load_point_in_time_stock_data` (the as-of cache seam, R110) so the
+        validator sees prices AS THEY WERE KNOWN on a past date, not today's.
     insights:
         Optional decision-engine insights — forwarded to the cascade scorer for
         corroboration only (never changes a direction).
