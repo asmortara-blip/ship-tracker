@@ -931,21 +931,32 @@ def _section_8_risk_score() -> None:
         try:
             from auth.audit import record_screening
 
-            record_screening(
-                subject=f"{party} · {route}",
-                inputs={
-                    "route": route, "cargo": cargo, "counterparty": party,
-                    "route_risk": route_r, "cargo_risk": cargo_r,
-                    "counterparty_risk": party_r,
-                    "weights": {"route": 0.45, "counterparty": 0.40, "cargo": 0.15},
-                },
-                # Illustrative list-version stamp: the curated matrices that
-                # produced this score are modeled, not a live SDN/PSC snapshot.
-                list_version="illustrative-matrix/2026.06",
-                score=float(score),
-                decision=_decision,
-                illustrative=True,
+            # Record ONCE per distinct screened state, NOT on every Streamlit
+            # rerun (this section body re-executes on every script run, even
+            # collapsed in its expander) — else the regulator-facing audit log
+            # floods with near-duplicate rows and the hash-chain write lock
+            # contends with the scheduler. Dedupe on the screened inputs+verdict.
+            _screen_key = (
+                f"{party}|{route}|{cargo}|{int(round(score))}|{_decision}"
+                "|illustrative-matrix/2026.06"
             )
+            if st.session_state.get("_last_screening_key") != _screen_key:
+                record_screening(
+                    subject=f"{party} · {route}",
+                    inputs={
+                        "route": route, "cargo": cargo, "counterparty": party,
+                        "route_risk": route_r, "cargo_risk": cargo_r,
+                        "counterparty_risk": party_r,
+                        "weights": {"route": 0.45, "counterparty": 0.40, "cargo": 0.15},
+                    },
+                    # Illustrative list-version stamp: the curated matrices that
+                    # produced this score are modeled, not a live SDN/PSC snapshot.
+                    list_version="illustrative-matrix/2026.06",
+                    score=float(score),
+                    decision=_decision,
+                    illustrative=True,
+                )
+                st.session_state["_last_screening_key"] = _screen_key
             st.caption(
                 "Audit trail: this screening run was recorded for regulator-facing "
                 "replay (subject · inputs · list version · score · decision · "

@@ -705,7 +705,9 @@ def screening_history(subject: str, *, limit: int = 100) -> list[dict]:
             "SELECT event_id, created_at, user_id, action, entity_type, "
             "entity_id, detail_json FROM audit_events "
             "WHERE action = ? AND entity_id = ? "
-            "ORDER BY created_at DESC LIMIT ?",
+            # rowid (monotonic insert order) breaks ties so same-microsecond
+            # created_at rows stay deterministically newest-first (review).
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (_SCREENING_ACTION, subject, cap),
         ).fetchall()
     except Exception as exc:  # noqa: BLE001

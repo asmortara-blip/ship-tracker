@@ -289,3 +289,19 @@ def test_basis_is_stamped_illustrative_by_default() -> None:
     rec = replay_screening(eid)
     assert rec is not None
     assert rec["illustrative"] is True
+
+
+def test_screening_history_same_microsecond_is_newest_first(isolated_state_db, monkeypatch):
+    """Same-microsecond created_at rows must STILL come back newest-first — the
+    rowid DESC tiebreaker (review LOW). Without it SQLite returns insert order
+    (oldest-first), inverting the contract."""
+    import auth.audit as audit
+    from engine.audit_search import screening_history
+
+    monkeypatch.setattr(audit, "_now_iso",
+                        lambda: "2026-06-08T00:00:00.000000+00:00")
+    for dec in ("clear", "flag", "block"):   # 'block' recorded LAST → newest
+        _record_one(subject="SAME-TS-SUBJECT", decision=dec, score=10.0)
+    hist = screening_history("SAME-TS-SUBJECT")
+    assert len(hist) == 3
+    assert hist[0]["decision"] == "block"    # newest-first despite tied timestamps
