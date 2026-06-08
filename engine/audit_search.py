@@ -578,6 +578,154 @@ def reseal_chain() -> int:
         return 0
 
 
+# ─── KYC / screening audit replay (R128) ──────────────────────────────────
+#
+# The "show me exactly why this vessel / counterparty was cleared on that date"
+# capability. ``auth.audit.record_screening`` persists one ``screening_run``
+# event per compliance-risk-score / screening run, with the full decision basis
+# (subject / inputs / list version / score / decision / operator / when) in the
+# ``detail_json`` column. These two helpers reconstruct that basis for an
+# auditor: one event by id (:func:`replay_screening`), or the time-ordered run
+# history of one subject (:func:`screening_history`). Both are READ-only,
+# best-effort, and NEVER raise — an auditor UI prefers an empty replay to a 500.
+
+# The action verb + entity_type ``record_screening`` writes. Kept here (not
+# imported from auth.audit) so the replay surface does not pull the write path
+# into its import graph; the two strings are the contract between writer/reader.
+_SCREENING_ACTION = "screening_run"
+_SCREENING_ENTITY_TYPE = "screening"
+
+
+def _flatten_screening_event(event: dict) -> dict:
+    """Lift a ``screening_run`` audit event into a flat replay record.
+
+    Merges the event envelope (event_id / created_at / user_id) with the
+    recorded basis from ``detail_json`` so the auditor sees one dict carrying
+    everything: WHO (``operator``), WHEN (``created_at``), the SUBJECT, the
+    modeled INPUTS, the LIST VERSION, the SCORE, the DECISION, and the
+    ``illustrative`` provenance flag. Missing basis keys degrade to honest
+    empties rather than raising — a partial record still replays what it has.
+    """
+    basis = event.get("detail_json") or {}
+    if not isinstance(basis, dict):
+        basis = {}
+    return {
+        "event_id": event.get("event_id", ""),
+        "created_at": event.get("created_at", ""),
+        # The operator is the audited user_id; surface it under both the raw
+        # column name and the auditor-facing alias so either lookup works.
+        "user_id": event.get("user_id", "") or "",
+        "operator": event.get("user_id", "") or "",
+        "subject": basis.get("subject", event.get("entity_id", "") or ""),
+        "inputs": basis.get("inputs", {}) if isinstance(basis.get("inputs"), dict) else {},
+        "list_version": basis.get("list_version", ""),
+        "score": basis.get("score", None),
+        "decision": basis.get("decision", ""),
+        "illustrative": bool(basis.get("illustrative", True)),
+    }
+
+
+def replay_screening(event_id: str) -> Optional[dict]:
+    """Reconstruct the exact recorded basis of one past screening run. (R128)
+
+    The regulator-facing replay of a single clearance: given the audit
+    ``event_id`` of a ``screening_run``, return a flat dict carrying the full
+    basis recorded at screen time — ``operator`` / ``created_at`` (when) /
+    ``subject`` / ``inputs`` (the modeled screening inputs) / ``list_version`` /
+    ``score`` / ``decision`` / ``illustrative``. This is an EXACT round-trip of
+    what ``auth.audit.record_screening`` wrote: what was recorded is what
+    replays.
+
+    Args:
+        event_id: The ``event_id`` of the ``screening_run`` audit row.
+
+    Returns:
+        The flat replay record, or ``None`` when the id is empty / unknown /
+        not a screening event, or on any read error. Never raises.
+    """
+    if not event_id or not isinstance(event_id, str):
+        return None
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT event_id, created_at, user_id, action, entity_type, "
+            "entity_id, detail_json FROM audit_events "
+            "WHERE event_id = ? AND action = ? LIMIT 1",
+            (event_id, _SCREENING_ACTION),
+        ).fetchone()
+        if row is None:
+            return None
+        event = {
+            "event_id": row["event_id"],
+            "created_at": row["created_at"],
+            "user_id": row["user_id"] or "",
+            "action": row["action"],
+            "entity_type": row["entity_type"] or "",
+            "entity_id": row["entity_id"] or "",
+            "detail_json": _parse_detail(row["detail_json"]),
+        }
+        return _flatten_screening_event(event)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.replay_screening: failed: {exc}")
+        return None
+
+
+def screening_history(subject: str, *, limit: int = 100) -> list[dict]:
+    """Time-ordered (newest-first) screening-run history for one subject. (R128)
+
+    "Show me every time this vessel / counterparty was screened." Returns the
+    list of flat replay records (same shape as :func:`replay_screening`) for
+    every ``screening_run`` whose recorded SUBJECT matches — letting an auditor
+    see how a subject's clearance evolved across list versions and operators.
+
+    Args:
+        subject: The vessel IMO / counterparty id matched against the audit
+                 ``entity_id`` (where ``record_screening`` stamps the subject).
+        limit:   Cap on rows returned, hard-enforced in SQL. ``<= 0`` → ``[]``.
+
+    Returns:
+        List of flat replay records, ``created_at`` DESC. Empty list on no
+        match, an empty subject, or any read error. Never raises.
+    """
+    if not subject or not isinstance(subject, str):
+        return []
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        return []
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT event_id, created_at, user_id, action, entity_type, "
+            "entity_id, detail_json FROM audit_events "
+            "WHERE action = ? AND entity_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (_SCREENING_ACTION, subject, cap),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.screening_history: failed: {exc}")
+        return []
+
+    out: list[dict] = []
+    for row in rows:
+        out.append(_flatten_screening_event({
+            "event_id": row["event_id"],
+            "created_at": row["created_at"],
+            "user_id": row["user_id"] or "",
+            "action": row["action"],
+            "entity_type": row["entity_type"] or "",
+            "entity_id": row["entity_id"] or "",
+            "detail_json": _parse_detail(row["detail_json"]),
+        }))
+    return out
+
+
 __all__ = [
     "AuditSearchQuery",
     "AuditSearchResult",
@@ -588,4 +736,6 @@ __all__ = [
     "get_distinct_entity_types",
     "verify_chain",
     "reseal_chain",
+    "replay_screening",
+    "screening_history",
 ]

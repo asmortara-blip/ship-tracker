@@ -277,6 +277,98 @@ def record_audit(
         )
 
 
+def record_screening(
+    *,
+    subject: str,
+    inputs: Optional[dict] = None,
+    list_version: str = "",
+    score: Optional[float] = None,
+    decision: str = "",
+    illustrative: bool = True,
+    user_id: Optional[str] = None,
+) -> None:
+    """Record one KYC/compliance-screening run for auditor replay (R128).
+
+    A regulator-facing "show me exactly why this vessel / counterparty was
+    cleared on that date" capability: every compliance-risk-score / screening
+    run persists a single, structured ``audit_events`` row whose ``detail_json``
+    carries the FULL BASIS of the decision — the modeled inputs, the list
+    version (or content stamp), the score, the decision, the operator, and the
+    wall-clock time (``created_at`` of the row). :func:`record_audit` writes the
+    row, so this inherits the same NEVER-RAISES + hash-chain + user-resolution
+    contract. The whole basis lives in the existing ``detail_json`` column — no
+    schema migration is needed.
+
+    Honesty (R128 / Compliance-tab provenance)
+    ------------------------------------------
+    The Compliance tab is ILLUSTRATIVE — the SCREENING CONTENT (the SDN/PSC
+    matrices and risk weights) is modeled, not a live screen. R128 adds the
+    REAL audit SUBSTRATE (record + replay). The recorded basis therefore stamps
+    ``illustrative=True`` by default so a replayed clearance truthfully reports
+    that its inputs were modeled — the audit trail records exactly what was
+    screened (modeled inputs included); it does NOT claim the screen was live.
+
+    Args:
+        subject:      The screened SUBJECT — vessel IMO or counterparty id /
+                      label. Recorded as the audit ``entity_id`` so a replay
+                      can be located by subject. An empty subject is still
+                      recorded (the system bucket).
+        inputs:       The modeled screening inputs (route / cargo / party /
+                      per-component risks / weights — whatever the call site
+                      fed the score). Serialized verbatim into the basis.
+        list_version: The sanctions / PSC list version, or a content-hash /
+                      as-of stamp identifying which list snapshot was screened
+                      against. Empty when the call site has no versioned list
+                      (recorded as-is so the gap is itself auditable).
+        score:        The computed compliance-risk score. Any numeric; coerced
+                      to ``float`` so the basis round-trips through JSON. ``None``
+                      records a missing score rather than fabricating one.
+        decision:     The clearance decision (``"clear"`` / ``"flag"`` /
+                      ``"block"``, or the call site's own band label). Free-form.
+        illustrative: Whether the screened INPUTS are modeled (the Compliance
+                      tab's provenance). Defaults to ``True`` — keep it honest.
+        user_id:      The OPERATOR. ``None`` resolves from the active session
+                      (the logged-in user who ran the screen); an explicit
+                      empty string records a system / unattributed run.
+
+    Returns:
+        None. Never raises — a failed audit write must not break the screen
+        render (the basis is best-effort, like every other audit hook).
+    """
+    try:
+        score_val: Optional[float]
+        if score is None:
+            score_val = None
+        else:
+            try:
+                score_val = float(score)
+            except (TypeError, ValueError):
+                score_val = None
+
+        basis: dict[str, Any] = {
+            "subject": subject if isinstance(subject, str) else str(subject),
+            "inputs": inputs if isinstance(inputs, dict) else {},
+            "list_version": list_version or "",
+            "score": score_val,
+            "decision": decision or "",
+            "illustrative": bool(illustrative),
+        }
+    except Exception as exc:  # noqa: BLE001 — basis assembly must not raise
+        logger.debug(
+            f"auth.audit.record_screening: basis assembly failed: {exc}"
+        )
+        basis = {"subject": "", "inputs": {}, "list_version": "",
+                 "score": None, "decision": "", "illustrative": True}
+
+    record_audit(
+        "screening_run",
+        entity_type="screening",
+        entity_id=(subject if isinstance(subject, str) else str(subject)) or "",
+        detail=basis,
+        user_id=user_id,
+    )
+
+
 def record_login_failure(username_attempt: str = "") -> None:
     """Record a failed login attempt for security review. NEVER raises.
 
@@ -462,6 +554,7 @@ from datetime import timedelta as _timedelta  # noqa: E402
 __all__ = [
     "AuditEvent",
     "record_audit",
+    "record_screening",
     "record_login_failure",
     "query_audit",
     "prune_old_audit_events",

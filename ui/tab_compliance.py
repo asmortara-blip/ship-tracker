@@ -918,6 +918,44 @@ def _section_8_risk_score() -> None:
         ]
         wsj_market_table(rec_headers, rec_rows)
 
+        # ── R128: KYC/screening audit trail. Record this screening run (its
+        # modeled inputs, the list-version stamp, the score, the decision, and
+        # the operator) to the append-only audit log so a regulator can later
+        # replay "why was this cleared on that date". Best-effort — a failed
+        # audit write must NOT break the calculator render. The basis is
+        # stamped illustrative=True (the screening CONTENT is modeled — the
+        # audit SUBSTRATE is real; it records exactly what was screened).
+        _decision = (
+            "block" if score >= 75 else "flag" if score >= 40 else "clear"
+        )
+        try:
+            from auth.audit import record_screening
+
+            record_screening(
+                subject=f"{party} · {route}",
+                inputs={
+                    "route": route, "cargo": cargo, "counterparty": party,
+                    "route_risk": route_r, "cargo_risk": cargo_r,
+                    "counterparty_risk": party_r,
+                    "weights": {"route": 0.45, "counterparty": 0.40, "cargo": 0.15},
+                },
+                # Illustrative list-version stamp: the curated matrices that
+                # produced this score are modeled, not a live SDN/PSC snapshot.
+                list_version="illustrative-matrix/2026.06",
+                score=float(score),
+                decision=_decision,
+                illustrative=True,
+            )
+            st.caption(
+                "Audit trail: this screening run was recorded for regulator-facing "
+                "replay (subject · inputs · list version · score · decision · "
+                "operator). The audit substrate is real; the screened inputs are "
+                "illustrative / modeled."
+            )
+        except Exception:
+            # Audit is best-effort — never break the calculator on a write fail.
+            logger.debug("compliance screening audit-record failed", exc_info=True)
+
         st.caption("Risk scores are illustrative guidance only. Not legal advice. Consult qualified sanctions counsel before any fixture decision.")
         st.markdown(source_footer([
             {"name": "Internal compliance heuristic", "kind": "modeled", "quality": "demo"},
