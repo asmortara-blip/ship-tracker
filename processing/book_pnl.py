@@ -186,6 +186,10 @@ def nav_series(positions, stock_data, *, days: int = 90, base: float = 100.0) ->
     """Current holdings marked against historical closes -> indexed NAV (base).
 
     A mark-to-history curve over the trailing ``days`` of common real closes.
+    The curve is RETURN-shaped (today's fixed share count valued over the past N
+    days, indexed to ``base``), so it rides the look-ahead-free total-return path
+    (``close * adj_factor``, R127) — otherwise a split in a held name injects a
+    spurious ~50% NAV step. adj_factor defaults to 1.0 → unchanged without splits.
     Empty Series when there are no priced holdings or no common history.
     """
     series_by_col: dict[int, pd.Series] = {}
@@ -193,7 +197,7 @@ def nav_series(positions, stock_data, *, days: int = 90, base: float = 100.0) ->
     i = 0
     for p in positions or []:
         sh = float(p.get("shares", 0) or 0)
-        s = _close_series(stock_data, str(p.get("ticker", "")))
+        s = _close_series(stock_data, str(p.get("ticker", "")), adjusted=True)
         if s is not None and not s.empty and sh and isinstance(s.index, pd.DatetimeIndex):
             series_by_col[i] = s
             shares_by_col[i] = sh
