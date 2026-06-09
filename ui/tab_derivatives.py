@@ -17,6 +17,11 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from data.quality import DataSource
+from processing.freight_forward_curve import (
+    build_forward_curve,
+    orderbook_pressure_from_fleet,
+)
 from processing.options_screener import screen_options
 from ui.styles import (
     C_ACCENT,
@@ -30,6 +35,7 @@ from ui.styles import (
     C_TEXT3,
     apply_dark_layout,
     insight_card_html,
+    live_data_badge,
     metric_card_row,
     page_header,
     section_divider,
@@ -62,7 +68,12 @@ def _sans(value: str, color: str = C_TEXT2, weight: int = 400) -> str:
     )
 
 
-# ── Provenance — every section in this tab is mock/demo until live FFA feed lands ──
+# ── Provenance ────────────────────────────────────────────────────────────────
+# R042: the Forward Curve section is now a MODELED term structure built from
+# REAL spot + momentum + the fleet orderbook (see processing.freight_forward_curve)
+# — its provenance is stamped MODELED by the engine, not demo. The remaining
+# sections below (quote board, options, basis, vol surface) are still mock/demo
+# placeholders until a live Baltic FFA feed lands.
 _DERIV_SOURCES = [
     {"name": "Baltic Exchange FFA quotes (mock)",   "kind": "demo", "quality": "demo"},
     {"name": "Internal options pricing (modeled)",  "kind": "modeled", "quality": "demo"},
@@ -72,17 +83,19 @@ _OPTIONS_SCREEN_SOURCES = [
     {"name": "Listed equity options screener", "kind": "modeled", "quality": "demo"},
 ]
 
+# Demo fallback for the modeled curve when no live spot is reachable (kept ONLY
+# as an explicitly-labelled demo anchor, never presented as a live FFA quote).
+_DEMO_SPOT_BDI: float = 1_847.0
+_DEMO_CURVE_SOURCE = DataSource(
+    name="Modeled FFA term structure (DEMO anchor — no live spot)",
+    kind="demo",
+    quality="demo",
+    notes="No live BDI/freight spot reachable — curve modeled off a demo "
+          "anchor (1,847). Illustrative shape only; not a live FFA quote.",
+)
 
-# ── Mock market data ───────────────────────────────────────────────────────────
-_BDI_SPOT = 1_847
 
-_FFA_CURVE = {
-    "months":   ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb"],
-    "bdi":      [1847, 1790, 1830, 1920, 2040, 2110, 2080, 1950, 1870, 1810, 1760, 1800],
-    "c5tc":     [14800, 14200, 14600, 15100, 15800, 16200, 16000, 15300, 14700, 14200, 13900, 14100],
-    "p5tc":     [10200, 9900, 10100, 10500, 11000, 11300, 11100, 10700, 10300, 10000, 9800, 9900],
-}
-
+# ── Mock market data (quote board / options / basis — still demo) ──────────────
 _QUOTE_BOARD = [
     {"contract": "BDI Cal26",     "bid": 1870, "ask": 1890, "last": 1882, "chg": +12,  "oi": 4820,  "vol": 312},
     {"contract": "BDI Cal27",     "bid": 1940, "ask": 1965, "last": 1951, "chg": +5,   "oi": 2140,  "vol": 88},
@@ -159,103 +172,181 @@ def _render_header() -> None:
         st.warning("Header KPIs unavailable.")
 
 
-# ── Section 2: FFA Forward Curve ───────────────────────────────────────────────
+# ── Section 2: FFA Forward Curve (MODELED term structure) ──────────────────────
+# R042: replaces the frozen `_FFA_CURVE` mock. The front is anchored on the REAL
+# BDI spot (FRED BSXRLM); the shape is a MODELED map from real spot momentum
+# (mean-reversion → backwardation/contango) and the real fleet orderbook delivery
+# schedule (incoming supply → contango). It is a fair-value CROSS-CHECK, clearly
+# labelled MODELED — never presented as a live Baltic FFA print.
 
-def _render_forward_curve() -> None:
+_CURVE_TENORS = (1, 3, 6, 12)  # months
+
+
+def _resolve_curve_inputs(macro_data, freight_data):
+    """Derive (spot, momentum, orderbook_pressure, is_real) for the curve.
+
+    Spot + momentum come from REAL BDI (FRED BSXRLM) when reachable, else a
+    documented demo anchor. Orderbook pressure always comes from the fleet
+    snapshot (a real Clarksons/Alphaliner baseline). Never raises.
+    """
+    spot = None
+    momentum = 0.5
+    is_real = False
+    try:
+        from data.fred_feed import get_bdi, compute_bdi_score
+        if macro_data:
+            bdi_df = get_bdi(macro_data)
+            if bdi_df is not None and not bdi_df.empty:
+                vals = bdi_df["value"].dropna() if "value" in bdi_df.columns else None
+                if vals is not None and not vals.empty:
+                    spot = float(vals.iloc[-1])
+                    momentum = float(compute_bdi_score(macro_data))
+                    is_real = spot > 0
+    except Exception as exc:  # noqa: BLE001 — provenance falls back to demo
+        logger.debug(f"BDI spot/momentum unavailable, using demo anchor: {exc}")
+
+    if not is_real:
+        spot = _DEMO_SPOT_BDI
+        momentum = 0.5
+
+    # Orderbook → supply-pressure scalar from the fleet snapshot.
+    pressure = 0.0
+    try:
+        from processing.fleet_tracker import get_fleet_data
+        fleet = get_fleet_data()
+        pressure = orderbook_pressure_from_fleet(
+            fleet.deliveries_next_12m_teu_m, fleet.total_teu_capacity_m,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Fleet orderbook unavailable, supply pressure 0: {exc}")
+
+    return spot, momentum, pressure, is_real
+
+
+def _render_forward_curve(macro_data=None, freight_data=None) -> None:
     try:
         section_header(
             "FFA Forward Curve",
-            "BDI spot vs 12-month FFA prices — C5TC Capesize and P5TC Panamax overlaid",
+            "MODELED BDI term structure — real spot + momentum + fleet orderbook. "
+            "A fair-value cross-check, NOT a live FFA quote.",
         )
 
-        months = _FFA_CURVE["months"]
+        spot, momentum, pressure, is_real = _resolve_curve_inputs(macro_data, freight_data)
+        curve = build_forward_curve(spot, momentum, pressure, tenors=_CURVE_TENORS)
 
-        # Normalize C5TC and P5TC to BDI-comparable scale for overlay clarity
-        # Show on dual-axis: BDI left, TC rates right
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=months, y=_FFA_CURVE["bdi"],
-            name="BDI FFA",
-            line=dict(color=C_ACCENT, width=2.5),
-            mode="lines+markers",
-            marker=dict(size=6),
-        ))
-
-        # Spot reference line
-        fig.add_hline(
-            y=_BDI_SPOT,
-            line=dict(color=C_HIGH, width=1.5, dash="dot"),
-            annotation_text=f"BDI Spot {_BDI_SPOT:,}",
-            annotation_font_color=C_HIGH,
-        )
-
-        # Quarter bands
-        for q_label, q_color, month_range in [
-            ("Q1 2026", C_MOD,   (0, 2)),
-            ("Q2 2026", C_TEAL,  (3, 5)),
-            ("Q3 2026", C_CONV,  (6, 8)),
-            ("Q4 2026", C_MACRO, (9, 11)),
-        ]:
-            fig.add_vrect(
-                x0=months[month_range[0]], x1=months[min(month_range[1], len(months)-1)],
-                fillcolor=q_color, opacity=0.04, line_width=0,
-                annotation_text=q_label, annotation_position="top left",
-                annotation_font_color=q_color, annotation_font_size=10,
+        if curve.degenerate or curve.spot <= 0:
+            st.info(
+                "No spot anchor available — a modeled forward curve needs a live "
+                "BDI/freight spot. Connect the macro feed (FRED BSXRLM) to model "
+                "the term structure."
             )
+            st.markdown(source_footer([_DEMO_CURVE_SOURCE]), unsafe_allow_html=True)
+            return
 
-        # C5TC on secondary y
-        fig.add_trace(go.Scatter(
-            x=months, y=_FFA_CURVE["c5tc"],
-            name="C5TC FFA ($/day)",
-            line=dict(color=C_MOD, width=2, dash="dash"),
-            mode="lines+markers",
-            marker=dict(size=5),
-            yaxis="y2",
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=months, y=_FFA_CURVE["p5tc"],
-            name="P5TC FFA ($/day)",
-            line=dict(color=C_HIGH, width=2, dash="dot"),
-            mode="lines+markers",
-            marker=dict(size=5),
-            yaxis="y2",
-        ))
-
-        apply_dark_layout(fig, height=420)
-        fig.update_layout(
-            yaxis=dict(title="BDI Points"),
-            yaxis2=dict(
-                title="TC Rate ($/day)", overlaying="y", side="right",
-                color=C_TEXT2, gridcolor="rgba(0,0,0,0)",
-            ),
-            legend=dict(orientation="h", y=-0.15, font=dict(color=C_TEXT2, size=11)),
-            margin=dict(l=60, r=60, t=20, b=50),
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Structure label — replaced with insight card
-        bdi_12m_avg = sum(_FFA_CURVE["bdi"][1:]) / len(_FFA_CURVE["bdi"][1:])
-        structure = "BACKWARDATION" if _BDI_SPOT > bdi_12m_avg else "CONTANGO"
-        s_action = "Prioritize" if structure == "BACKWARDATION" else "Caution"
-        s_desc = (
-            "Spot above forward — bullish freight market. Carriers hold pricing power."
-            if structure == "BACKWARDATION"
-            else "Spot below forward — bearish freight market. Shippers have advantage."
+        # Provenance pill: MODELED off real spot, or the demo anchor.
+        curve_src = curve.source if is_real else _DEMO_CURVE_SOURCE
+        anchor_note = (
+            f"real BDI spot {curve.spot:,.0f} · momentum {curve.momentum:.2f} · "
+            f"orderbook pressure {curve.orderbook_pressure:.2f}"
+            if is_real else
+            f"demo anchor {curve.spot:,.0f} · neutral momentum · "
+            f"orderbook pressure {curve.orderbook_pressure:.2f}"
         )
         st.markdown(
+            live_data_badge(curve_src)
+            + f'<span style="margin-left:8px;color:{C_TEXT3};font-family:var(--mono);'
+              f'font-size:0.72rem;">{anchor_note}</span>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Plot: modeled forward curve vs the real spot reference line ────────
+        x_labels = [f"{t}M" for t in curve.tenors_months]
+        line_color = C_HIGH if curve.shape == "BACKWARDATION" else (
+            C_LOW if curve.shape == "CONTANGO" else C_ACCENT
+        )
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=list(curve.forwards),
+            name="Modeled BDI forward",
+            line=dict(color=C_ACCENT, width=2.5),
+            mode="lines+markers",
+            marker=dict(size=8, color=line_color),
+            hovertemplate="Tenor %{x}<br>Modeled fwd %{y:,.0f}<extra></extra>",
+        ))
+        fig.add_hline(
+            y=curve.spot,
+            line=dict(color=C_HIGH, width=1.5, dash="dot"),
+            annotation_text=f"BDI Spot {curve.spot:,.0f}",
+            annotation_font_color=C_HIGH,
+        )
+        apply_dark_layout(fig, height=380, showlegend=False)
+        fig.update_layout(
+            yaxis=dict(title="BDI Points (modeled)"),
+            xaxis=dict(title="Forward tenor"),
+            margin=dict(l=60, r=30, t=20, b=50),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ── Carry KPIs: shape · basis · roll yield ────────────────────────────
+        shape_color = C_HIGH if curve.shape == "BACKWARDATION" else (
+            C_LOW if curve.shape == "CONTANGO" else C_TEXT2
+        )
+        basis_color = C_HIGH if curve.basis > 0 else (C_LOW if curve.basis < 0 else C_TEXT2)
+        roll_color = C_HIGH if curve.roll_yield > 0 else (C_LOW if curve.roll_yield < 0 else C_TEXT2)
+        metric_card_row(
+            [
+                {"label": "Term Structure", "value": curve.shape,
+                 "accent": shape_color, "sublabel": "Modeled from momentum + orderbook"},
+                {"label": "Basis (Spot − 1M Fwd)",
+                 "value": f"{'+' if curve.basis >= 0 else ''}{curve.basis:,.0f} pts",
+                 "accent": basis_color, "sublabel": "Spot rich vs nearest forward" if curve.basis > 0
+                 else ("Spot cheap vs nearest forward" if curve.basis < 0 else "At parity")},
+                {"label": "Roll Yield (annualized)",
+                 "value": f"{curve.roll_yield * 100:+.1f}%",
+                 "accent": roll_color, "sublabel": "Carry rolling the front toward spot"},
+            ],
+            columns=3,
+        )
+
+        # ── Tradeable read: fade on a sharp-rally backwardation ───────────────
+        if curve.shape == "BACKWARDATION":
+            if curve.fade_signal:
+                title, score, action = "Backwardation — Fade the Spot Rally", 0.72, "Caution"
+                desc = (
+                    "Modeled curve is backwardated off a sharp spot rally: forwards "
+                    f"sit below spot ({curve.basis:+,.0f} pts basis). Mean-reversion read "
+                    "— a long-SPOT holder rolls DOWN the curve (negative carry). Fade / "
+                    "favour selling forward freight. MODELED cross-check, not a live FFA quote."
+                )
+            else:
+                title, score, action = "Backwardation — Spot Above Forwards", 0.60, "Monitor"
+                desc = (
+                    f"Forwards below spot ({curve.basis:+,.0f} pts basis), bullish near-term "
+                    "freight but rally not extreme. Carriers hold pricing power on the front."
+                )
+        elif curve.shape == "CONTANGO":
+            title, score, action = "Contango — Forwards Above Spot", 0.40, "Caution"
+            desc = (
+                f"Modeled curve in contango ({curve.basis:+,.0f} pts basis): weak spot and/or "
+                "a heavy fleet orderbook lift the deferred tenors above spot. Bearish — "
+                "incoming supply caps how high spot can hold. Favours buyers / shippers."
+            )
+        else:
+            title, score, action = "Flat Term Structure", 0.50, "Monitor"
+            desc = (
+                "Momentum and orderbook supply roughly offset — the modeled curve is flat. "
+                "No directional carry edge; the spike (if any) is expected to be met by deliveries."
+            )
+
+        st.markdown(
             insight_card_html(
-                title=f"Market Structure: {structure}",
-                score=0.75 if structure == "BACKWARDATION" else 0.35,
-                action=s_action,
-                rationale=s_desc,
-                category="MACRO",
+                title=f"Market Structure: {title}",
+                score=score, action=action, rationale=desc, category="MACRO",
             ),
             unsafe_allow_html=True,
         )
-        st.markdown(source_footer(_DERIV_SOURCES), unsafe_allow_html=True)
+        st.markdown(source_footer([curve_src]), unsafe_allow_html=True)
     except Exception as exc:
         logger.warning(f"Forward curve error: {exc}")
         st.warning("Forward curve chart unavailable.")
@@ -650,11 +741,18 @@ def _render_vol_surface() -> None:
 
 # ── Main render ────────────────────────────────────────────────────────────────
 
-def render(stock_data=None, macro_data=None, freight_data=None) -> None:
-    """Shipping Derivatives & FFA Dashboard."""
+def render(route_results=None, freight_data=None, macro_data=None,
+           *args, **kwargs) -> None:
+    """Shipping Derivatives & FFA Dashboard.
+
+    Called positionally from app.py as
+    ``render(route_results, freight_data, macro_data)``. The Forward Curve
+    section consumes the REAL ``macro_data`` (FRED BDI) + ``freight_data`` to
+    build a MODELED term structure; other sections are still demo placeholders.
+    """
     # Lazy import keeps perf_telemetry off the tab-load critical path.
     from engine.perf_telemetry import track_render
-    
+
     with track_render('derivatives'):
         try:
             page_header(
@@ -669,7 +767,7 @@ def render(stock_data=None, macro_data=None, freight_data=None) -> None:
         _render_header()
 
         section_divider("Forward Market")
-        _render_forward_curve()
+        _render_forward_curve(macro_data=macro_data, freight_data=freight_data)
         _render_quote_board()
 
         section_divider("Options Pricing")
