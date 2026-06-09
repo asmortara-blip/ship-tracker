@@ -640,6 +640,68 @@ def check_world_graph_criticality_alerts(
     )]
 
 
+def check_ais_anomaly_alerts(
+    voyages: Optional[list] = None,
+    *,
+    max_alerts: int = 5,
+) -> list[ShippingAlert]:
+    """Fire AIS_ANOMALY alerts for the worst AIS-integrity anomalies (R049).
+
+    Wraps ``processing.ais_integrity.scan_fleet`` — coverage gaps inside a
+    high-risk geofence + kinematic-impossibility (teleport / position-spoof)
+    flags. The detection math is real (great-circle distance + vessel-type
+    speed bands), but it runs over the SYNTHETIC modeled voyage fleet, so every
+    alert is ILLUSTRATIVE / MODELED — a demo of the capability, NOT real
+    vessel-tracking intelligence. The body says so explicitly.
+
+    Only the top ``max_alerts`` (severity-sorted by ``scan_fleet``) become
+    alerts so a noisy fleet cannot flood the store. The anomalous vessel's IMO
+    is carried in ``ticker`` (reusing the dedup-keyed field so the SAME vessel
+    anomaly fires once, not repeatedly); the voyage's route in ``route_id``.
+    Never raises — any failure returns ``[]``.
+    """
+    try:
+        from processing.ais_integrity import scan_fleet
+    except Exception as exc:
+        logger.debug(f"check_ais_anomaly_alerts: import failed: {exc}")
+        return []
+
+    try:
+        if voyages is None:
+            from data.voyage_dataset import build_voyage_fleet
+
+            voyages = build_voyage_fleet()
+        anomalies = scan_fleet(voyages)
+    except Exception as exc:
+        logger.warning(f"check_ais_anomaly_alerts: compute failed: {exc}")
+        return []
+
+    alerts: list[ShippingAlert] = []
+    for a in anomalies[: max(0, int(max_alerts))]:
+        try:
+            label = "Coverage gap" if a.kind == "GAP" else "Kinematic-impossibility"
+            vessel = a.vessel_name or a.imo or a.voyage_id or "vessel"
+            alerts.append(_make(
+                alert_type="AIS_ANOMALY",
+                severity=a.severity,
+                title=f"AIS {label} flag: {vessel} (MODELED)",
+                body=(
+                    f"{a.reason} ILLUSTRATIVE — detected on the synthetic modeled "
+                    f"voyage fleet, not a live AIS feed; not real intelligence "
+                    f"about a real ship."
+                ),
+                ticker=a.imo,
+                route_id=str(getattr(a, "voyage_id", "") or ""),
+                value=(
+                    a.gap_duration_hours if a.kind == "GAP" else a.implied_speed_kts
+                ),
+                threshold=(0.0 if a.kind == "GAP" else a.max_speed_kts),
+            ))
+        except Exception:
+            continue
+    return alerts
+
+
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
     """Fire if any port congestion score exceeds threshold."""
     alerts: list[ShippingAlert] = []

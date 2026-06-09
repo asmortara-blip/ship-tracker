@@ -1018,6 +1018,116 @@ def _section_8_risk_score() -> None:
         st.error("Risk score calculator unavailable.")
 
 
+def _section_9_ais_integrity() -> None:
+    """AIS Integrity / Dark Activity (R049) — coverage gaps + spoof teleports.
+
+    Runs the REAL great-circle / implied-speed detectors over the SYNTHETIC
+    modeled voyage fleet, so every anomaly shown is ILLUSTRATIVE — a demo of
+    the capability on modeled data, not real vessel intelligence. Best-effort:
+    own try/except, honest empty state, never breaks the tab. Also emits an
+    AIS_ANOMALY alert for the worst anomalies (best-effort).
+    """
+    try:
+        st.markdown(insight_card_html(
+            title="AIS Integrity / Dark Activity — MODELED Capability Demo",
+            score=0.50,
+            action="Watch",
+            rationale=(
+                "Detects two flagship dark-activity signals: AIS coverage GAPS that "
+                "fall inside a high-risk geofence (a transponder going dark near a "
+                "sanctioned chokepoint) and kinematic-impossibility TELEPORTS (an "
+                "implied speed no real ship could achieve — a position spoof). The "
+                "detection math is real (great-circle distance + vessel-type speed "
+                "bands), but it runs over the SYNTHETIC modeled voyage fleet, so the "
+                "anomalies below are ILLUSTRATIVE — a demo of the capability, NOT "
+                "real vessel-tracking intelligence."
+            ),
+            category="REFERENCE",
+        ), unsafe_allow_html=True)
+
+        anomalies: list = []
+        try:
+            from data.voyage_dataset import build_voyage_fleet
+            from processing.ais_integrity import scan_fleet
+
+            anomalies = scan_fleet(build_voyage_fleet())
+        except Exception:
+            logger.exception("AIS integrity scan failed")
+            anomalies = []
+
+        if not anomalies:
+            st.info(
+                "No AIS-integrity anomalies surfaced on the current modeled fleet. "
+                "(This is illustrative — a clean synthetic fleet, not a live screen.)"
+            )
+            return
+
+        gaps = sum(1 for a in anomalies if a.kind == "GAP")
+        teleports = sum(1 for a in anomalies if a.kind == "TELEPORT")
+        crit = sum(1 for a in anomalies if a.severity == "CRITICAL")
+        metric_card_row(
+            [
+                {"label": "Coverage Gaps (in high-risk zones)",
+                 "value": str(gaps), "accent": C_LOW,
+                 "sublabel": "transponder dark near a chokepoint"},
+                {"label": "Kinematic Teleports (spoof flags)",
+                 "value": str(teleports), "accent": C_MOD,
+                 "sublabel": "implied speed > vessel max"},
+                {"label": "Critical Severity",
+                 "value": str(crit), "accent": C_LOW,
+                 "sublabel": "worst anomalies"},
+            ],
+            columns=3,
+        )
+
+        section_header(
+            "Detected Anomalies",
+            "Worst first — vessel IMO, type of flag, location and reason (all MODELED)",
+        )
+
+        headers = ["Vessel", "IMO", "Flag", "Type", "Severity", "Detail", "Reason"]
+        rows = []
+        for a in anomalies[:25]:
+            sev_color = (
+                C_LOW if a.severity == "CRITICAL"
+                else (C_MOD if a.severity == "HIGH" else C_ACCENT)
+            )
+            kind_label = "Coverage Gap" if a.kind == "GAP" else "Teleport (spoof)"
+            if a.kind == "GAP":
+                detail = f"{a.gap_duration_hours:.0f}h · {a.zone_name}"
+            else:
+                detail = f"{a.implied_speed_kts:.0f} kts (max {a.max_speed_kts:.0f})"
+            rows.append([
+                _sans(a.vessel_name or "—", color=C_TEXT, weight=600),
+                _mono(a.imo or "—", color=C_TEXT2),
+                _sans(a.flag or "—"),
+                _sans(kind_label, color=C_TEXT, weight=600),
+                _sans(a.severity, color=sev_color, weight=700),
+                _mono(detail, color=C_TEXT2),
+                _sans(a.reason),
+            ])
+        wsj_market_table(headers, rows)
+
+        # Best-effort alert emission for the worst anomalies — never breaks the tab.
+        try:
+            from engine.alert_engine_v2 import check_ais_anomaly_alerts, save_alerts
+
+            ais_alerts = check_ais_anomaly_alerts(max_alerts=5)
+            if ais_alerts:
+                save_alerts(ais_alerts)
+        except Exception:
+            logger.debug("AIS anomaly alert emission skipped", exc_info=True)
+
+        st.markdown(source_footer([
+            {"name": "Modeled Voyage Fleet (synthetic)",        "kind": "modeled", "quality": "demo"},
+            {"name": "Great-circle kinematics + speed bands",   "kind": "modeled", "quality": "demo"},
+            {"name": "Maritime chokepoint geofences (real coords)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("AIS integrity section error")
+        st.error("AIS integrity section unavailable.")
+
+
 # ---------------------------------------------------------------------------
 # Main render
 # ---------------------------------------------------------------------------
@@ -1056,6 +1166,7 @@ def render(port_results=None, insights=None, *args, **kwargs) -> None:
             ("CII Tracker",                   _section_4_cii_tracker),
             ("Sanctions Evasion Patterns",    _section_5_evasion_patterns),
             ("Dark Fleet Tracker",            _section_6_dark_fleet),
+            ("AIS Integrity / Dark Activity", _section_9_ais_integrity),
             ("Port State Control",            _section_7_psc),
             ("Compliance Risk Score",         _section_8_risk_score),
         ]
