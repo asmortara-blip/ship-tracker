@@ -51,6 +51,15 @@ _SRC_DRAYAGE   = DataSource.demo("POLA/POLB Drayage Report")
 _SRC_CHASSIS   = DataSource.demo("Chassis Pool Operators")
 _SRC_FREIGHTOS = DataSource.demo("Freightos Intermodal Index")
 _SRC_MODEL     = DataSource.modeled("Proprietary Congestion Model")
+_SRC_REROUTE   = DataSource.modeled(
+    "Costed Reroute Recommender",
+    notes=(
+        "Ranks substitute corridors when a lane/chokepoint is stressed. "
+        "Headroom from processing.congestion_predictor + "
+        "processing.port_supply_lines (real bands + supply deficits); "
+        "stressed chokepoints from processing.chokepoint_analyzer."
+    ),
+)
 
 # ---------------------------------------------------------------------------
 # Static reference data
@@ -547,6 +556,166 @@ def _render_inland_destination() -> None:
         st.error("Inland destination analysis unavailable")
 
 
+def _build_reroute_inputs() -> tuple[dict, dict, dict, list]:
+    """Assemble REAL congestion + supply + rate inputs for the reroute ranker.
+
+    Returns ``(routes, congestion, supply, active_disruptions)``:
+      * ``routes``      — the live route registry (list[ShippingRoute]).
+      * ``congestion``  — ``{locode: CongestionForecast}`` for every route's
+        destination port, seeded from each port's real mean-reversion baseline
+        (processing.congestion_predictor). Deterministic, no clock/RNG.
+      * ``supply``      — ``{locode: PortSupplyState}`` from the real port
+        supply-lines join (processing.port_supply_lines).
+      * ``active``      — chokepoints with an active disruption
+        (processing.chokepoint_analyzer).
+
+    Any sub-failure degrades that channel to empty rather than raising, so the
+    ranker still runs on whatever real signal is available.
+    """
+    from processing.chokepoint_analyzer import get_current_active_disruptions
+    from processing.congestion_predictor import predict_congestion
+    from processing.congestion_predictor import _port_baseline  # real per-port heuristic
+    from processing.port_supply_lines import build_port_supply_chains
+    from routes.route_registry import ROUTES
+
+    # Supply states keyed by locode (real regional deficit join).
+    supply: dict = {}
+    try:
+        chains = build_port_supply_chains()
+        supply = {c.port.locode: c.port for c in chains}
+    except Exception:
+        logger.exception("reroute: supply-lines build failed")
+
+    # Congestion forecasts for every destination port. Seed current congestion
+    # from the port's real reversion baseline so the band is honest and the
+    # call is deterministic (no live feed inside the tab).
+    congestion: dict = {}
+    try:
+        dest_locodes = {r.dest_locode for r in ROUTES}
+        for locode in dest_locodes:
+            seed = _port_baseline(locode)
+            congestion[locode] = predict_congestion(locode, seed)
+    except Exception:
+        logger.exception("reroute: congestion forecast failed")
+
+    active: list = []
+    try:
+        active = get_current_active_disruptions()
+    except Exception:
+        logger.exception("reroute: active-disruption lookup failed")
+
+    return list(ROUTES), congestion, supply, active
+
+
+def _render_reroute_recommender() -> None:
+    """Costed failover: when a chokepoint is stressed, rank substitute corridors.
+
+    Replaces the old hardcoded reroute prose with the real ranked detour —
+    congestion headroom, transit-day delta, supply-deficit headroom and the
+    $/FEU premium — for each active maritime disruption.
+    """
+    try:
+        section_header(
+            "Costed Reroute Recommender",
+            "When a chokepoint is stressed, the ranked substitute corridors — "
+            "congestion headroom, extra transit days, port supply headroom and "
+            "the $/FEU premium of the detour",
+        )
+        st.markdown(live_data_badge(_SRC_REROUTE), unsafe_allow_html=True)
+
+        from processing.reroute_recommender import recommend_reroutes
+
+        routes, congestion, supply, active = _build_reroute_inputs()
+
+        if not active:
+            alert_banner(
+                "No chokepoint currently flagged as disrupted — no reroute "
+                "needed. Substitute corridors appear here when a passage is "
+                "stressed.",
+                level="info",
+            )
+            return
+
+        # Map registry key (lower) for each active disruption so we can call the
+        # ranker by its canonical key. chokepoint_analyzer keys the registry.
+        from processing.chokepoint_analyzer import CHOKEPOINTS
+        name_to_key = {cp.name: key for key, cp in CHOKEPOINTS.items()}
+
+        any_rendered = False
+        for cp in active:
+            cp_key = name_to_key.get(cp.name)
+            if not cp_key:
+                continue
+            options = recommend_reroutes(
+                cp_key, routes, congestion, supply, top_n=3
+            )
+            if not options:
+                continue
+
+            any_rendered = True
+            _sub_section(
+                f'{cp.name} — {cp.current_risk_level} '
+                f'({cp.current_disruption_type.replace("_", " ").title()})'
+            )
+
+            headers = [
+                "Substitute Corridor", "Congestion Headroom", "Extra Transit",
+                "Port Supply", "$/FEU Delta", "Composite", "Why This Detour",
+            ]
+            rows = []
+            for o in options:
+                hr = o.congestion_headroom
+                hr_color = C_HIGH if hr > 0.05 else C_LOW if hr < -0.05 else C_MOD
+                hr_str = f"{hr*100:+.0f}pp"
+
+                ed = o.extra_transit_days
+                ed_color = C_HIGH if ed <= 0 else C_MOD if ed <= 5 else C_LOW
+                ed_str = f"+{ed}d" if ed > 0 else (f"{ed}d" if ed < 0 else "same")
+
+                def_days = o.supply_deficit_days
+                if def_days < -3:
+                    sup_color, sup_str = C_LOW, f"{def_days:.0f}d short"
+                elif def_days > 3:
+                    sup_color, sup_str = C_HIGH, f"{def_days:+.0f}d surplus"
+                else:
+                    sup_color, sup_str = C_TEXT2, "balanced"
+
+                cost = o.extra_cost_usd_feu
+                if cost > 0:
+                    cost_color, cost_str = C_LOW, f"+${cost:,.0f}"
+                elif cost < 0:
+                    cost_color, cost_str = C_HIGH, f"-${abs(cost):,.0f}"
+                else:
+                    cost_color, cost_str = C_TEXT3, "n/a"
+
+                comp_color = (
+                    C_HIGH if o.composite_score >= 0.66
+                    else C_MOD if o.composite_score >= 0.45
+                    else C_LOW
+                )
+                rows.append([
+                    _sans(o.substitute_route_name, color=C_TEXT, weight=700),
+                    _mono(hr_str, color=hr_color, weight=700),
+                    _mono(ed_str, color=ed_color, weight=700),
+                    _mono(sup_str, color=sup_color, weight=600),
+                    _mono(cost_str, color=cost_color, weight=700),
+                    badge(f"{o.composite_score:.0%}", comp_color),
+                    _sans(o.rationale, color=C_TEXT2, weight=500),
+                ])
+            wsj_market_table(headers, rows)
+
+        if not any_rendered:
+            alert_banner(
+                "No viable substitute corridor found for the currently-stressed "
+                "chokepoints — every alternative lane either shares the same "
+                "passage or serves a different origin→destination market.",
+                level="warning",
+            )
+    except Exception:
+        logger.exception("Reroute recommender failed")
+        st.error("Costed reroute recommender unavailable")
+
+
 def _render_cost_comparison() -> None:
     try:
         section_header(
@@ -722,6 +891,7 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
         _render_inland_destination()
 
         section_divider("Routing Economics")
+        _render_reroute_recommender()
         _render_cost_comparison()
 
         section_divider("Market Signals")
@@ -730,7 +900,7 @@ def render(port_results=None, route_results=None, insights=None, *args, **kwargs
         try:
             st.markdown(source_footer([
                 _SRC_RAILROADS, _SRC_DRAYAGE, _SRC_IANA,
-                _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL,
+                _SRC_FREIGHTOS, _SRC_CHASSIS, _SRC_MODEL, _SRC_REROUTE,
             ], align="left"), unsafe_allow_html=True)
         except Exception:
             logger.exception("Footer failed")
