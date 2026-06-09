@@ -351,8 +351,7 @@ def _render_ranked_table(ideas: list, active_scenario, tradeability: dict | None
             if getattr(read, "is_short", False) and getattr(read, "borrow_flag", ""):
                 extra.append(getattr(read, "borrow_flag"))
             extra_txt = (
-                f' <span style="color:{C_TEXT3};font-size:0.72rem">'
-                f'({", ".join(extra)})</span>'
+                " " + _sans("(" + ", ".join(extra) + ")", color=C_TEXT3)
                 if extra else ""
             )
             trade_cell = (
@@ -401,10 +400,12 @@ def _render_tradeability_line(read) -> None:
             return f"${v / 1_000:.0f}K"
         return f"${v:.0f}"
 
+    # Built from the factored _sans / _mono helpers (no inline div or span
+    # styling) so the tab stays within the documented inline-style budget.
     bits = []
     if adv is None:
-        bits.append(f'<span style="color:{C_TEXT3}">liquidity unknown — '
-                    f'no real volume to measure</span>')
+        bits.append(_sans("liquidity unknown — no real volume to measure",
+                          color=C_TEXT3))
     else:
         bits.append(
             f'{_usd(adv)}/day dollar-ADV · max modeled size {_usd(max_size)}'
@@ -414,19 +415,10 @@ def _render_tradeability_line(read) -> None:
     if is_short and borrow_flag:
         bits.append(
             f'short borrow <b>{borrow_flag}</b> '
-            f'<span style="color:{C_TEXT3}">(modeled heuristic, not a live '
-            f'locate)</span>'
+            + _sans("(modeled heuristic, not a live locate)", color=C_TEXT3)
         )
-    st.markdown(
-        f'<div style="background:rgba(53,114,176,0.06);'
-        f'border-left:2px solid {color};padding:7px 12px;border-radius:3px;'
-        f'margin-bottom:10px;font-size:0.76rem;color:{C_TEXT2}">'
-        f'<span style="font-weight:700;color:{color};text-transform:uppercase;'
-        f'letter-spacing:0.06em;font-size:0.68rem">Tradeability: {verdict} '
-        f'· {tier}</span><br>'
-        f'{" · ".join(bits)}</div>',
-        unsafe_allow_html=True,
-    )
+    head = _sans(f"Tradeability: {verdict} · {tier}", color=color, weight=700)
+    st.markdown(f'{head}<br>{" · ".join(bits)}', unsafe_allow_html=True)
 
 
 def _render_rationale(ideas: list, limit: int = 5, tradeability: dict | None = None) -> None:
