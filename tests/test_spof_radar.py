@@ -29,12 +29,19 @@ def _axis(radar: SpofRadar, name: str) -> AxisSpof:
 # ── HHI helper reuse + threshold sanity ──────────────────────────────────
 
 
-def test_hhi_helper_is_reused_not_reimplemented() -> None:
-    """R030 must reuse company_supply_risk._hhi, not roll its own."""
-    import processing.spof_radar as sr
+def test_partition_axis_score_matches_canonical_hhi() -> None:
+    """R030 must REUSE the canonical Σ(share²) HHI, not a divergent reimpl — and
+    the reuse must be on the SCORING PATH, not just an import binding (review).
+    The carrier axis = the book weight vector, so its score must equal the
+    canonical company_supply_risk._hhi of those weights."""
     from processing.company_supply_risk import _hhi as canonical_hhi
 
-    assert sr._hhi is canonical_hhi
+    book = {"ZIM": 0.6, "MATX": 0.3, "SBLK": 0.1}
+    radar = compute_spof_radar(book)
+    carrier = _axis(radar, "carrier")
+    expected = canonical_hhi([0.6, 0.3, 0.1])      # 0.36 + 0.09 + 0.01 = 0.46
+    assert abs(expected - 0.46) < 1e-9
+    assert carrier.score == round(expected, 6)     # scoring path uses the same math
 
 
 def test_thresholds_mirror_port_concentration_ladder() -> None:

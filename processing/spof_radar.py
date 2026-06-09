@@ -30,8 +30,9 @@ The four axes
 Metric per axis
 ---------------
 * carrier / commodity / origin are PARTITIONS (shares sum to ~1) → Herfindahl
-  HHI via the reused ``company_supply_risk._hhi``. Range 1/n (diversified) → 1.0
-  (single bucket). A 90 %-one-bucket book scores ~0.81.
+  HHI via the reused ``company_concentration_alerts._axis_concentration`` (the
+  canonical Σ(share²) helper — not reimplemented here). Range 1/n (diversified)
+  → 1.0 (single bucket). A 90 %-one-bucket book scores ~0.81.
 * chokepoint is SERIAL/overlapping (shares can sum to > 1) → MAX single-key
   exposure, NOT HHI (HHI is meaningless on a sum-can-exceed-1 vector).
 
@@ -42,8 +43,10 @@ the commodity / route / chokepoint axes for ONE TICKER from the registry. R030
 REUSES exactly that machinery — ``chokepoint_shares``, ``_route_to_chokepoints``,
 ``routes_for_commodity``, ``_axis_concentration`` — but operates on the USER'S
 BOOK (weighted across names) and adds the two axes R040 lacks: **carrier**
-(single-name SPOF) and **origin** (cargo-origin-region SPOF). The HHI helper is
-the single ``company_supply_risk._hhi`` — never reimplemented.
+(single-name SPOF) and **origin** (cargo-origin-region SPOF). The HHI is computed
+by R040's ``_axis_concentration`` — never reimplemented here. The score→band
+label uses an axis-neutral SPOF ladder (``_spof_band``) so a non-port axis breach
+reads "Single-Point Risk", not the port-specific "Single-Port Risk".
 
 Fire / critical thresholds (documented, published — not fitted)
 ---------------------------------------------------------------
@@ -63,8 +66,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Reuse the single HHI helper — do NOT reimplement (constraint R030).
-from processing.company_supply_risk import _hhi
+# The HHI math is REUSED (not reimplemented) via
+# company_concentration_alerts._axis_concentration below — the canonical
+# Σ(share²) Herfindahl over normalized axis shares. (R030 extends R040.)
+
+# SPOF-neutral band ladder: identical thresholds to the port CONCENTRATION_BANDS,
+# but the top noun is axis-agnostic ("Single-Point Risk", not "Single-Port Risk")
+# so a carrier / origin / commodity breach doesn't read as a PORT risk (review).
+_SPOF_BANDS: list = [
+    (0.00, "Diversified"),
+    (0.25, "Moderate"),
+    (0.45, "Concentrated"),
+    (0.65, "Highly Concentrated"),
+    (0.85, "Single-Point Risk"),
+]
+
+
+def _spof_band(score: float) -> str:
+    """Axis-neutral SPOF band for an HHI / max-exposure score in [0,1]."""
+    label = _SPOF_BANDS[0][1]
+    for lower, candidate in _SPOF_BANDS:
+        if float(score) >= lower:
+            label = candidate
+    return label
+
 
 # Reuse R040's axis machinery (serial-chokepoint max, registry inversion,
 # partition-vs-serial metric selector) — extend, never duplicate.
@@ -74,7 +99,6 @@ from processing.company_concentration_alerts import (
     _axis_concentration,
     _normalize_shares,
     chokepoint_shares,
-    concentration_band,
 )
 
 __all__ = [
@@ -109,7 +133,7 @@ class AxisSpof:
     axis: str                               # one of SPOF_AXES
     score: float                            # [0, 1] — HHI (partition) or max
     #                                         single-key exposure (chokepoint)
-    band: str                               # concentration_band(score)
+    band: str                               # _spof_band(score) — axis-neutral
     dominant_node: str                      # the most-exposed key on this axis
     dominant_share: float                   # that key's share [0, 1]
     n_buckets: int                          # # of distinct keys on this axis
@@ -306,7 +330,7 @@ def compute_spof_radar(
         axes_out.append(AxisSpof(
             axis=axis,
             score=round(score, 6),
-            band=concentration_band(score),
+            band=_spof_band(score),
             dominant_node=str(dominant_node),
             dominant_share=dominant_share,
             n_buckets=len(shares),
