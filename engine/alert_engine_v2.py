@@ -472,6 +472,64 @@ def check_company_concentration_alerts(
     return alerts
 
 
+def check_spof_dimension_alerts(
+    *,
+    book_weights: Optional[dict] = None,
+    fire_threshold: float = 0.45,
+    critical_threshold: float = 0.85,
+    top_in_body: int = 3,
+) -> list[ShippingAlert]:
+    """Fire when a book is single-point-of-failure-concentrated on ANY axis (R030).
+
+    Wraps ``processing.spof_radar.compute_spof_radar`` + ``spof_alerts`` over the
+    four risk axes (chokepoint / origin-region / carrier / commodity). Where
+    ``check_company_concentration_alerts`` only catches PORT concentration, this
+    catches a book that looks port-diversified yet is, say, 80 % Suez-dependent
+    or 90 % one-carrier.
+
+    ``book_weights`` is the user's ``{ticker: weight}`` book. When ``None``
+    (the default, scheduler path) it falls back to the tracked-universe
+    EQUAL-WEIGHT book — an honest "what does a fully-diversified book of the
+    tracked names look like on each axis?" baseline computed purely from the
+    registries (no hot fetch). A real book is passed in from the Portfolio path.
+
+    HHI bands (default thresholds, mirroring the port-concentration ladder):
+      * ``score >= 0.85``  → CRITICAL ("Single-Point Risk")
+      * ``score >= 0.45``  → HIGH    ("Concentrated")
+      * below              → no alert
+
+    Dedupe via the standard key uses ``route_id`` to carry the axis name, so a
+    book that stays concentrated on the same axis fires once per window, not
+    repeatedly. Never raises — any failure returns ``[]``.
+    """
+    try:
+        from processing.spof_radar import compute_spof_radar, spof_alerts
+    except Exception as exc:
+        logger.debug(f"check_spof_dimension_alerts: import failed: {exc}")
+        return []
+
+    try:
+        if book_weights is None:
+            # Honest default: equal-weight the tracked universe. Pure registry
+            # math — no prices, no live fetch on the hot path.
+            from processing.exposure_matrix import COMPANY_COMMODITY_EXPOSURE
+            tickers = list(COMPANY_COMMODITY_EXPOSURE.keys())
+            if not tickers:
+                return []
+            w = 1.0 / len(tickers)
+            book_weights = {t: w for t in tickers}
+        radar = compute_spof_radar(
+            book_weights,
+            fire_threshold=fire_threshold,
+            critical_threshold=critical_threshold,
+            top_in_body=top_in_body,
+        )
+        return list(spof_alerts(radar, fire_threshold=fire_threshold))
+    except Exception as exc:
+        logger.warning(f"check_spof_dimension_alerts: compute failed: {exc}")
+        return []
+
+
 def check_cargo_flow_anomaly_alerts(
     *,
     window_days: int = 14,
@@ -925,6 +983,15 @@ def run_all_checks(
         all_alerts.extend(check_company_concentration_alerts())
     except Exception as exc:
         logger.warning(f"Company concentration alert check failed: {exc}")
+
+    # Multi-dimension SPOF radar (R030) — the port-only concentration check
+    # above misses a book that's port-diversified yet 80% one-chokepoint /
+    # one-origin / one-carrier / one-commodity. Defaults to the tracked-
+    # universe equal-weight book (pure registry math, no hot fetch).
+    try:
+        all_alerts.extend(check_spof_dimension_alerts())
+    except Exception as exc:
+        logger.warning(f"SPOF dimension alert check failed: {exc}")
 
     # Cargo flow anomaly alerts — per-route mix shift vs trailing window.
     # Requires the cargo_mix_history scheduler job to have accumulated
