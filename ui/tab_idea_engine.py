@@ -722,6 +722,91 @@ def _render_optimization_mini(ideas: list, stock_data=None) -> None:
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
+# ─── Section 4b: Conviction → position sizing (R031) ────────────────────────
+
+def _render_position_sizing(ideas: list, stock_data=None) -> None:
+    """Turn each idea's ordinal conviction into a SIGNED target weight.
+
+    Runs ``engine.position_sizer.size_from_conviction`` over the REAL cached
+    returns panel (``processing.book_pnl.returns_panel`` — look-ahead-free total
+    returns, R127) so a PM sees a *weight*, not a label. Vol-target mode:
+    inverse-vol × conviction, rescaled to a 12% book-vol budget, per-name cap
+    15%, gross cap 100%. Own try/except + an honest empty-state when no real
+    return history is available — a size is NEVER fabricated for a dark name.
+
+    Style budget: every styled cell goes through the existing ``_mono`` / ``_sans``
+    micro-helpers, so no new inline span/div styling is introduced."""
+    if not ideas:
+        return
+    try:
+        from engine.position_sizer import size_from_conviction
+        from processing.book_pnl import returns_panel
+
+        tickers = [getattr(i, "ticker", "") for i in ideas if getattr(i, "ticker", "")]
+        returns = returns_panel(stock_data, tickers)
+        book = size_from_conviction(ideas, returns)
+    except Exception:
+        logger.exception("Idea Engine — position sizing failed")
+        return
+
+    section_header(
+        "Position Sizing (conviction → weight)",
+        subtitle=(
+            "Vol-target sizing: signed weight ∝ conviction ÷ real σ, rescaled "
+            "to a 12% book-vol budget (per-name cap 15%, gross cap 100%). σ is "
+            "the REAL look-ahead-free return vol; a name with no real vol is "
+            "skipped, never sized off a fabricated number."
+        ),
+    )
+
+    if not book.positions:
+        st.caption(
+            "Sizing needs real return history — no tracked name had enough "
+            "cached closes to estimate vol, so no weights were produced. "
+            "(Sizes are never fabricated for a dark name.)"
+        )
+        return
+
+    cov_note = (
+        "real sample covariance" if book.used_covariance
+        else "diagonal (uncorrelated) approximation"
+    )
+    metric_card_row(
+        [
+            {"label": "Sized Names", "value": str(len(book.positions)),
+             "accent": C_ACCENT, "sublabel": f"{len(book.skipped)} skipped"},
+            {"label": "Gross Exposure",
+             "value": f"{book.gross_exposure * 100:.0f}%",
+             "accent": C_TEXT2, "sublabel": "Σ|wᵢ| (cap 100%)"},
+            {"label": "Net Exposure",
+             "value": f"{book.net_exposure * 100:+.0f}%",
+             "accent": (C_HIGH if book.net_exposure > 0 else
+                        (C_LOW if book.net_exposure < 0 else C_TEXT2)),
+             "sublabel": "long − short"},
+            {"label": "Est. Book Vol",
+             "value": f"{book.est_book_vol * 100:.1f}%",
+             "accent": C_TEXT2, "sublabel": "annualized · target 12%"},
+        ],
+        columns=4,
+    )
+
+    headers = ["Ticker", "Direction", "Conviction", "Real σ (ann.)", "Target Weight"]
+    rows: list[list[str]] = []
+    for p in book.positions:
+        w = getattr(p, "target_weight", 0.0)
+        rows.append([
+            _sans(getattr(p, "ticker", "?"), color=C_TEXT, weight=700),
+            _sans(getattr(p, "direction", ""),
+                  color=_direction_color(getattr(p, "direction", ""))),
+            _mono(f"{getattr(p, 'conviction_score', 0.0):.2f}", color=C_TEXT2),
+            _mono(f"{getattr(p, 'annual_vol', 0.0) * 100:.0f}%", color=C_TEXT2),
+            _mono(f"{w * 100:+.1f}%",
+                  color=(C_HIGH if w > 0 else (C_LOW if w < 0 else C_TEXT2))),
+        ])
+    wsj_market_table(headers, rows)
+    st.caption(book.provenance)
+
+
 # ─── Main render ────────────────────────────────────────────────────────────
 
 def render(
@@ -796,6 +881,9 @@ def render(
             # ── Optimization mini ─────────────────────────────────────────────
             section_divider("Portfolio Construction")
             _render_optimization_mini(ideas, stock_data)
+
+            # ── Position sizing (conviction → signed target weight; R031) ─────
+            _render_position_sizing(ideas, stock_data)
 
             # ── Track record (point-in-time signal ledger; R004) ──────────────
             section_divider("Track Record")
