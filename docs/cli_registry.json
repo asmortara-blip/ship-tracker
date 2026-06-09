@@ -111,6 +111,33 @@
           "is_positional": false,
           "name": "--compare-baseline",
           "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "R027 headline-drift gate. In addition to the --strict floor checks, exit 1 if any validator's HEADLINE metric has REGRESSED past its per-metric tolerance vs the committed baseline (docs/backtest-headline-baseline.json). Direction-aware: improvements never fail. Implies --strict.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--drift-strict",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Path to the committed headline baseline JSON used by --drift-strict / --update-headline-baseline (default: docs/backtest-headline-baseline.json).",
+          "is_flag": false,
+          "is_positional": false,
+          "name": "--headline-baseline",
+          "required": false
+        },
+        {
+          "choices": [],
+          "default": null,
+          "help": "Re-mint the headline baseline JSON (at --headline-baseline) from the current run and exit. Run this after an INTENTIONAL model change, then commit the regenerated file in the same PR \u2014 the maintainable seam for the R027 drift gate.",
+          "is_flag": true,
+          "is_positional": false,
+          "name": "--update-headline-baseline",
+          "required": false
         }
       ],
       "description": "tools/backtests.py \u2014 run every platform backtest in one command.",
