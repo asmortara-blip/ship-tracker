@@ -75,6 +75,34 @@ def test_contango_curve_slopes_up_in_tenor():
     assert all(a < b for a, b in zip(fwds, fwds[1:]))
 
 
+# ── F4: shape from the full-curve slope, not the front basis ──────────────────
+
+def test_sloped_curve_with_flat_front_basis_is_not_labelled_flat():
+    """R042/F4 — a visibly sloped curve must NOT read FLAT.
+
+    A mild rally tilts the per-tenor forwards by depth = t/longest, so the FRONT
+    (1M) tenor is barely displaced — its basis can fall WITHIN the flat band even
+    though the curve is genuinely sloped at the long end. The shape is derived
+    from the full-curve slope (spot vs the longest forward), so this is labelled
+    BACKWARDATION, not FLAT. ``basis``/``roll_yield`` stay as front-tenor
+    measures (basis here is tiny but positive).
+    """
+    from processing.freight_forward_curve import _FLAT_BAND
+
+    c = build_forward_curve(1000.0, momentum=0.55, orderbook_deliveries=0.0,
+                            tenors=(1, 3, 6, 12))
+    # The FRONT basis is within the flat band → old front-gated logic → FLAT.
+    front_basis_frac = (c.spot - c.forwards[0]) / c.spot
+    assert front_basis_frac < _FLAT_BAND
+    # But the curve is genuinely sloped (back tenor well below spot) …
+    assert c.forwards[-1] < c.forwards[0] < c.spot
+    # … so the shape (full-curve slope) is correctly directional, not FLAT.
+    assert c.shape == "BACKWARDATION"
+    # basis/roll_yield remain front-tenor measures: small but consistent sign.
+    assert c.basis > 0
+    assert c.roll_yield > 0
+
+
 # ── Flat / neutral ────────────────────────────────────────────────────────────
 
 def test_neutral_momentum_no_orderbook_is_flat_at_spot():

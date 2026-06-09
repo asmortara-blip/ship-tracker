@@ -650,15 +650,17 @@ def check_ais_anomaly_alerts(
     Wraps ``processing.ais_integrity.scan_fleet`` — coverage gaps inside a
     high-risk geofence + kinematic-impossibility (teleport / position-spoof)
     flags. The detection math is real (great-circle distance + vessel-type
-    speed bands), but it runs over the SYNTHETIC modeled voyage fleet, so every
-    alert is ILLUSTRATIVE / MODELED — a demo of the capability, NOT real
-    vessel-tracking intelligence. The body says so explicitly.
+    speed bands), but it only fires on a REAL multi-point AIS track (a live
+    feed). On the SYNTHETIC modeled voyage fleet there is no real track to
+    scan, so ``scan_fleet`` returns ``[]`` and this function returns ``[]`` —
+    an honest no-op, NOT a manufactured alert. Real alerts appear only once a
+    live AIS feed supplies real tracks.
 
-    Only the top ``max_alerts`` (severity-sorted by ``scan_fleet``) become
-    alerts so a noisy fleet cannot flood the store. The anomalous vessel's IMO
-    is carried in ``ticker`` (reusing the dedup-keyed field so the SAME vessel
-    anomaly fires once, not repeatedly); the voyage's route in ``route_id``.
-    Never raises — any failure returns ``[]``.
+    When real anomalies do surface, only the top ``max_alerts`` (severity-sorted
+    by ``scan_fleet``) become alerts so a noisy fleet cannot flood the store.
+    The anomalous vessel's IMO is carried in ``ticker`` (reusing the dedup-keyed
+    field so the SAME vessel anomaly fires once, not repeatedly); the voyage's
+    route in ``route_id``. Never raises — any failure returns ``[]``.
     """
     try:
         from processing.ais_integrity import scan_fleet

@@ -281,18 +281,49 @@ def test_deterministic() -> None:
 # ── Real registry + chokepoint linkage (wiring smoke) ───────────────────────
 
 
-def test_real_chokepoint_bypass_excludes_routes_through_it() -> None:
-    """For a real chokepoint stress, every option genuinely bypasses it."""
+def test_real_chokepoint_bypass_is_same_origin_like_for_like() -> None:
+    """A chokepoint bypass must be a SAME-ORIGIN like-for-like detour (R022/F8).
+
+    For a chokepoint stress, candidates are constrained to the SAME origin AND
+    dest region as the primary affected route, so the transit/$ deltas vs the
+    single-origin baseline are genuinely comparable (not a misleading
+    cross-origin number). Gibraltar's primary affected lane is `asia_europe`
+    (Asia East -> Europe); the in-registry same-origin bypass that does NOT
+    transit Gibraltar is `ningbo_europe` (also Asia East -> Europe).
+    """
     from processing.chokepoint_analyzer import CHOKEPOINTS
+    from routes.route_registry import ROUTES as REAL_ROUTES, ROUTES_BY_ID
+
+    opts = recommend_reroutes("gibraltar", REAL_ROUTES, {}, {}, top_n=5)
+    through_gib = set(CHOKEPOINTS["gibraltar"].affected_routes)
+    assert opts, "expected the same-origin Gibraltar bypass in the real registry"
+
+    primary = ROUTES_BY_ID["asia_europe"]
+    sub_ids = {o.substitute_route_id for o in opts}
+    assert "ningbo_europe" in sub_ids
+    for o in opts:
+        # Genuinely bypasses the chokepoint …
+        assert o.substitute_route_id not in through_gib
+        assert o.bypasses_chokepoint == "gibraltar"
+        # … and is a true same-origin like-for-like detour, so its transit/$
+        # deltas are comparable against the single-origin baseline.
+        cand = ROUTES_BY_ID[o.substitute_route_id]
+        assert cand.origin_region == primary.origin_region
+        assert cand.dest_region == primary.dest_region
+
+
+def test_chokepoint_with_no_same_origin_bypass_is_empty() -> None:
+    """Honest empty-state: no SAME-ORIGIN detour → no recommendation (R022/F8).
+
+    Hormuz's primary affected lane is `middle_east_to_europe` (Middle East ->
+    Europe). The registry has no other Middle East -> Europe lane that bypasses
+    Hormuz, so the only "bypasses" would be cross-origin (e.g. Asia East ->
+    Europe) — whose transit/$ deltas vs a Middle-East-origin baseline would be
+    misleading. We therefore return [] rather than a misleading number.
+    """
     from routes.route_registry import ROUTES as REAL_ROUTES
 
-    # Hormuz has in-registry bypass corridors (Europe-market lanes not via Hormuz).
-    opts = recommend_reroutes("hormuz", REAL_ROUTES, {}, {}, top_n=5)
-    through_hormuz = set(CHOKEPOINTS["hormuz"].affected_routes)
-    assert opts, "expected at least one Hormuz bypass in the real registry"
-    for o in opts:
-        assert o.substitute_route_id not in through_hormuz
-        assert o.bypasses_chokepoint == "hormuz"
+    assert recommend_reroutes("hormuz", REAL_ROUTES, {}, {}, top_n=5) == []
 
 
 def test_real_lane_stress_finds_like_for_like_swap() -> None:

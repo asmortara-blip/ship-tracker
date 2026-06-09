@@ -13,11 +13,16 @@ name), it:
 
   1. resolves the stressed lane(s) — directly, or via the chokepoint's
      ``affected_routes`` — and the chokepoint being bypassed (if any);
-  2. finds candidate SUBSTITUTE corridors — *other* registry routes serving a
-     similar origin→dest (matched on ``origin_region``/``dest_region``), with
-     the stressed route(s) excluded, and (for a chokepoint stress) any
-     candidate that ALSO transits the stressed chokepoint excluded so every
-     proposal is a genuine bypass;
+  2. finds candidate SUBSTITUTE corridors — *other* registry routes serving the
+     SAME corridor (matched on BOTH ``origin_region`` AND ``dest_region``), with
+     the stressed route(s) excluded, and (for a chokepoint stress) any candidate
+     that ALSO transits the stressed chokepoint excluded so every proposal is a
+     genuine bypass. The same-origin match is deliberate (R022/F8): a chokepoint
+     bypass must be a SAME-ORIGIN like-for-like detour, otherwise the transit-day
+     and $/FEU deltas (measured against the single-origin baseline) would be a
+     misleading cross-origin comparison. When the registry has no same-origin
+     bypass for a stressed chokepoint, the honest result is ``[]`` rather than a
+     misleading number;
   3. scores each substitute on FOUR documented axes from REAL upstream signals
      — congestion headroom (its forecast 30-day congestion band vs. the
      stressed baseline), transit-day delta (the time cost of the detour),
@@ -417,22 +422,24 @@ def recommend_reroutes(
             # For a chokepoint stress, exclude candidates that also transit it.
             if cp_key and cid in through_cp:
                 continue
-            # Candidate must serve a SIMILAR corridor.
+            # Candidate must serve a SIMILAR corridor. In BOTH the lane-stress
+            # and chokepoint-stress cases we require the SAME origin AND dest
+            # region, so the transit-day + $/FEU deltas are a true like-for-like
+            # comparison against the single-origin baseline.
             #   * Lane stress (no chokepoint): a like-for-like swap — same
             #     ORIGIN and DEST region (e.g. Asia→Europe ↔ Asia→Europe).
-            #   * Chokepoint stress: a BYPASS that still serves the same
-            #     destination MARKET — match on DEST region only, since the
-            #     point is to reach the same market via a different passage,
-            #     possibly from a different origin.
-            if cp_key:
-                if _route_attr(cand, "dest_region") != base_dest_region:
-                    continue
-            else:
-                if (
-                    _route_attr(cand, "origin_region") != base_origin_region
-                    or _route_attr(cand, "dest_region") != base_dest_region
-                ):
-                    continue
+            #   * Chokepoint stress: a same-origin DETOUR that reaches the same
+            #     destination market via a DIFFERENT passage (bypassing the
+            #     stressed chokepoint, already enforced by the through_cp
+            #     exclusion above). We deliberately keep the SAME origin region:
+            #     a cross-origin candidate would make the transit/$ deltas vs a
+            #     single-origin baseline misleading (R022/F8). The honest
+            #     comparison is a true like-for-like detour from the same origin.
+            if (
+                _route_attr(cand, "origin_region") != base_origin_region
+                or _route_attr(cand, "dest_region") != base_dest_region
+            ):
+                continue
 
             opt = _score_substitute(
                 cand=cand,

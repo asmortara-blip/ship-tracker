@@ -76,16 +76,26 @@ orderbook (supply pushes up) can net to a near-FLAT curve — an honest 'the
 spike will be met by deliveries' read. The shape is labelled FLAT in that
 band rather than forcing a direction.
 
-Carry metrics:
-  * ``basis``       = spot − front_forward (nearest tenor). >0 = backwardation.
-  * ``roll_yield``  = annualized % carry from rolling the front tenor down (or
+Shape vs carry metrics — they measure DIFFERENT points of the curve:
+  * ``shape``       = the FULL-CURVE direction, derived from spot vs the LONGEST
+                      forward (where the modeled tilt is strongest, since the
+                      per-tenor displacement scales with depth = t/longest).
+                      >0 (spot above the back) = BACKWARDATION, <0 = CONTANGO,
+                      within ±_FLAT_BAND = FLAT. Using the longest tenor (not the
+                      front) avoids labelling a visibly sloped curve FLAT.
+  * ``basis``       = spot − front_forward (nearest tenor) — a FRONT-tenor
+                      measure. >0 = front backwardation. Because the front tenor
+                      is the least-displaced point, ``basis`` can be small (even
+                      within the flat band) while ``shape`` is directional.
+  * ``roll_yield``  = annualized % carry from rolling the FRONT tenor down (or
                       up) the curve toward spot, sign-consistent with the shape:
                           roll_yield = (spot / front_forward - 1) / front_tenor_yr
-                      A **positive** roll yield with backwardation = a long
-                      forward rolls UP toward a higher spot (carry to a long
-                      forward) — but for a long *spot* holder this same
-                      backwardation is the *fade* signal (spot expected to fall
-                      to the forward). The label disambiguates.
+                      A FRONT-tenor measure (0.0 when ``shape`` is FLAT). A
+                      **positive** roll yield with backwardation = a long forward
+                      rolls UP toward a higher spot (carry to a long forward) —
+                      but for a long *spot* holder this same backwardation is the
+                      *fade* signal (spot expected to fall to the forward). The
+                      label disambiguates.
 
 Everything is pure (no streamlit/plotly), deterministic, and degenerate-safe:
 empty / non-finite / non-positive spot, or no tenors → a FLAT curve at spot
@@ -297,12 +307,20 @@ def build_forward_curve(
 
     basis = s - front_fwd  # >0 = backwardation (spot rich vs nearest forward)
 
-    # Shape label only when the basis clears the flat band (avoid mislabeling a
-    # numerically-flat curve).
+    # SHAPE is derived from the FULL-CURVE slope, not the front basis (R042/F4).
+    # The per-tenor tilt scales with depth = t/longest, so the displacement is
+    # SMALLEST at the front (1M) tenor and LARGEST at the longest tenor. Gating
+    # the shape label on the front basis would let a visibly sloped curve read
+    # FLAT (the front basis is the weakest point of the signal). We instead test
+    # spot vs the LONGEST forward — where the modeled signal is strongest — so a
+    # genuinely sloped curve is labelled correctly. (``basis`` and ``roll_yield``
+    # below remain FRONT-tenor measures, as documented.)
+    back_fwd = forwards[-1]
+    shape_slope = s - back_fwd  # >0 = forwards sit below spot → backwardation
     flat_threshold = _FLAT_BAND * s
-    if basis > flat_threshold:
+    if shape_slope > flat_threshold:
         shape = "BACKWARDATION"
-    elif basis < -flat_threshold:
+    elif shape_slope < -flat_threshold:
         shape = "CONTANGO"
     else:
         shape = "FLAT"

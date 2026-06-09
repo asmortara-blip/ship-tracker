@@ -234,14 +234,18 @@ def _render_forward_curve(macro_data=None, freight_data=None) -> None:
         spot, momentum, pressure, is_real = _resolve_curve_inputs(macro_data, freight_data)
         curve = build_forward_curve(spot, momentum, pressure, tenors=_CURVE_TENORS)
 
-        if curve.degenerate or curve.spot <= 0:
+        # When there is no live BDI spot, ``_resolve_curve_inputs`` falls back to
+        # a fixed DEMO anchor (``_DEMO_SPOT_BDI``), so the curve below is always a
+        # labeled illustrative DEMO — not an empty state. Say so explicitly (the
+        # old "no spot anchor" empty-state box was unreachable dead code, since
+        # the demo anchor guarantees a valid positive spot — F5).
+        if not is_real:
             st.info(
-                "No spot anchor available — a modeled forward curve needs a live "
-                "BDI/freight spot. Connect the macro feed (FRED BSXRLM) to model "
-                "the term structure."
+                "No live BDI/freight spot — showing an ILLUSTRATIVE DEMO curve "
+                f"anchored on a fixed demo spot ({curve.spot:,.0f}), neutral "
+                "momentum, and the real fleet orderbook. Connect the macro feed "
+                "(FRED BSXRLM) to anchor the term structure on a live spot."
             )
-            st.markdown(source_footer([_DEMO_CURVE_SOURCE]), unsafe_allow_html=True)
-            return
 
         # Provenance pill: MODELED off real spot, or the demo anchor.
         curve_src = curve.source if is_real else _DEMO_CURVE_SOURCE
@@ -358,7 +362,8 @@ def _render_quote_board() -> None:
     try:
         section_header(
             "FFA Quote Board",
-            "Live bid/ask quotes — Baltic Exchange cleared contracts",
+            "Illustrative bid/ask quotes (mock) — Baltic Exchange cleared "
+            "contracts; sample data, not a live feed",
         )
 
         rows = []

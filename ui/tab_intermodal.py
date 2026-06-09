@@ -55,9 +55,12 @@ _SRC_REROUTE   = DataSource.modeled(
     "Costed Reroute Recommender",
     notes=(
         "Ranks substitute corridors when a lane/chokepoint is stressed. "
-        "Headroom from processing.congestion_predictor + "
-        "processing.port_supply_lines (real bands + supply deficits); "
-        "stressed chokepoints from processing.chokepoint_analyzer."
+        "Headroom from each port's MODELED mean-reversion baseline "
+        "(processing.congestion_predictor) + regional supply deficits "
+        "(processing.port_supply_lines); stressed chokepoints from "
+        "processing.chokepoint_analyzer. Absolute congestion levels are "
+        "baseline-seeded — only the headroom DIFFERENCES between corridors "
+        "are comparative."
     ),
 )
 
@@ -587,8 +590,10 @@ def _build_reroute_inputs() -> tuple[dict, dict, dict, list]:
         logger.exception("reroute: supply-lines build failed")
 
     # Congestion forecasts for every destination port. Seed current congestion
-    # from the port's real reversion baseline so the band is honest and the
-    # call is deterministic (no live feed inside the tab).
+    # from the port's MODELED mean-reversion baseline so the call is
+    # deterministic (no live feed inside the tab). Absolute levels are
+    # baseline-seeded; only the headroom DIFFERENCES between corridors are
+    # comparative.
     congestion: dict = {}
     try:
         dest_locodes = {r.dest_locode for r in ROUTES}

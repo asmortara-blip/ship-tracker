@@ -21,13 +21,21 @@ per-vessel-type speed bands (``_SPEED_BAND``). The math is genuine.
 HONESTY / PROVENANCE — read before trusting any anomaly this surfaces.
 
 The DETECTION LOGIC here is real (great-circle distance, implied-speed
-kinematics, point-in-geofence math). But it runs over the **synthetic**
-``data.voyage_dataset`` fleet — modeled voyages on real route geometry, NOT a
-live AIS feed. Every anomaly this module returns is therefore *illustrative*:
-a demo of the capability on modeled data, NOT a real vessel-tracking finding.
-The ``AisAnomaly.provenance`` field is stamped ``MODELED`` and every anomaly
-inherits the voyage dataset's modeled provenance. Do NOT present a detected
-anomaly as real intelligence about a real ship.
+kinematics, point-in-geofence math). It is the genuine, ready-for-a-live-feed
+core: hand a detector a REAL multi-point AIS ``track=`` and it will surface
+real coverage gaps and real kinematic impossibilities.
+
+But the synthetic ``data.voyage_dataset`` fleet carries only a SINGLE real
+position per voyage — there is NO real multi-point AIS track to scan. We do
+NOT reconstruct + scan a fabricated track, and we do NOT inject illustrative
+anomalies. The honest result of scanning the synthetic fleet is therefore
+ZERO anomalies (``assess_voyage`` / ``scan_fleet`` → ``[]``): an honest
+empty-state, not a manufactured finding. When a live AIS feed is wired in,
+pass its real tracks via ``track=`` and the detectors light up unchanged.
+
+The ``AisAnomaly.provenance`` field is stamped ``MODELED`` to mark that this
+subsystem is wired against the modeled fleet; a real finding on a real track
+would carry the same dataclass but originate from a live feed.
 ────────────────────────────────────────────────────────────────────────────
 
 Pure, deterministic, and **never raises** — degenerate tracks (a single point,
@@ -302,10 +310,20 @@ def _resolve_zones(high_risk_zones: Optional[Iterable]) -> list[HighRiskZone]:
     return out
 
 
-# ── Voyage → track reconstruction ────────────────────────────────────────────
+# ── Voyage → track reconstruction (TEST / ILLUSTRATION ONLY) ─────────────────
+#
+# IMPORTANT: this helper is NOT used by the production scan path. A ``Voyage``
+# carries only a single real position, so any multi-ping "track" derived from
+# it is a FABRICATION, not real AIS coverage — scanning it would manufacture
+# the very gaps/teleports the detectors report. The production detectors only
+# run on a REAL caller-supplied ``track=`` (a live AIS feed). This function is
+# retained solely as a deterministic fixture for exercising the geometry in
+# tests / illustration; ``assess_voyage`` / ``scan_fleet`` never call it.
 
 def voyage_ping_track(voyage, *, n_pings: int = 12) -> list[AisPing]:
     """Reconstruct a deterministic AIS ping track for a modeled voyage.
+
+    TEST / ILLUSTRATION ONLY — NOT a production scan source.
 
     The ``Voyage`` dataclass carries only a *single* current position, so a
     multi-ping track has to be reconstructed from the voyage geometry: pings
@@ -313,12 +331,11 @@ def voyage_ping_track(voyage, *, n_pings: int = 12) -> list[AisPing]:
     voyage's current position, evenly spaced in time between the departure date
     and "now" (departure + elapsed transit).
 
-    This reconstruction is **modeled** — it is the synthetic track the real
-    detectors then operate on. It is smooth by construction, so it produces NO
-    anomalies on its own; ``assess_voyage`` injects a deterministic,
-    per-vessel-stable perturbation (derived from the vessel's stable name key)
-    into a fraction of the fleet so the capability has something illustrative to
-    surface. See ``_inject_modeled_anomaly``.
+    This reconstruction is a smooth FABRICATION — it is not real AIS coverage,
+    so the production scan path (``assess_voyage`` / ``scan_fleet``) deliberately
+    does NOT use it: feeding it to the detectors would manufacture coverage gaps
+    and teleports that no real ship produced. It exists only as a deterministic
+    fixture for tests / illustration of the geometry.
 
     Returns ``[]`` for a voyage with no usable geometry (never raises).
     """
@@ -365,77 +382,6 @@ def voyage_ping_track(voyage, *, n_pings: int = 12) -> list[AisPing]:
         return []
 
 
-def _vessel_key(voyage) -> int:
-    """Stable, process-independent integer derived from the vessel identity.
-
-    Reuses the voyage dataset's FNV-1a name hash so the same vessel always
-    perturbs the same way — the injected illustrative anomaly is reproducible.
-    """
-    try:
-        from data.voyage_dataset import _vessel_name_key
-
-        seed = getattr(voyage, "imo", "") or getattr(voyage, "vessel_name", "")
-        return _vessel_name_key(str(seed))
-    except Exception:
-        return 0
-
-
-def _inject_modeled_anomaly(voyage, track: list[AisPing], zones: list[HighRiskZone]):
-    """Deterministically perturb a fraction of voyages so the demo has signal.
-
-    The reconstructed track is smooth and never anomalous on its own. To
-    illustrate the capability on the synthetic fleet we deterministically
-    inject — keyed off the vessel's stable name hash so the SAME vessel always
-    behaves identically — one of:
-
-      * a COVERAGE GAP: stretch the time delta of a mid-track leg whose
-        midpoint sits inside a high-risk zone (≈1 in 7 vessels that happen to
-        transit a zone), OR
-      * a TELEPORT: jump one ping far off the path so the implied speed is
-        physically impossible (≈1 in 11 vessels).
-
-    This is purely illustrative MODELED behaviour — it is NOT a claim that the
-    vessel did anything. Returns the (possibly) modified track.
-    """
-    if len(track) < 3:
-        return track
-    key = _vessel_key(voyage)
-    if key == 0:
-        return track
-
-    # GAP injection: only meaningful if some leg's midpoint is in a zone.
-    if zones and (key % 7 == 0):
-        # Find the first leg whose midpoint sits inside a high-risk zone.
-        for i in range(len(track) - 1):
-            a, b = track[i], track[i + 1]
-            m_lat, m_lon = _midpoint(a.lat, a.lon, b.lat, b.lon)
-            if any(_point_in_zone(m_lat, m_lon, z) for z in zones):
-                # Stretch every subsequent ping's timestamp forward by a big
-                # offset → the i→i+1 leg becomes a long coverage gap.
-                bump = _dt.timedelta(hours=11.0)
-                new = track[: i + 1] + [
-                    AisPing(ts=p.ts + bump, lat=p.lat, lon=p.lon)
-                    for p in track[i + 1 :]
-                ]
-                return new
-
-    # TELEPORT injection: shove one interior ping far off the great-circle so
-    # the implied speed on the leg INTO it is impossible. Offset by ~6 degrees
-    # of latitude (~660 km) over a sub-hour modeled leg → clearly impossible.
-    if key % 11 == 0:
-        j = 1 + (key % (len(track) - 2))  # an interior index, never first/last
-        p = track[j]
-        # Push north (clamped to a valid latitude) so the jump is large.
-        spoof_lat = p.lat + 6.0
-        if spoof_lat > 89.0:
-            spoof_lat = p.lat - 6.0
-        track = list(track)
-        track[j] = AisPing(ts=p.ts, lat=spoof_lat, lon=p.lon)
-        return track
-
-    return track
-
-
 # ── Detectors ────────────────────────────────────────────────────────────────
 
 def _voyage_meta(voyage) -> dict:
@@ -464,16 +410,20 @@ def detect_gaps(
     is normal coverage sparsity and is suppressed. The midpoint is where the
     transponder would have gone dark, so it is the right point to geofence-test.
 
-    ``track`` lets a caller (or a test) supply an explicit list of ``AisPing``
-    to scan directly, bypassing the modeled reconstruction — the detection math
-    is identical, just on a real (caller-provided) track. When ``None`` the
-    voyage's modeled-and-perturbed track is used.
+    ``track`` is the REAL caller-supplied list of ``AisPing`` to scan (e.g. a
+    live AIS feed). When ``None`` there is no real track to scan — a synthetic
+    voyage holds only a single position, so we return ``[]`` (an honest
+    empty-state) rather than reconstructing + scanning a fabricated track that
+    would manufacture coverage gaps no real ship produced.
 
-    Severity scales with how far the gap exceeds the threshold. MODELED.
+    Severity scales with how far the gap exceeds the threshold.
     """
     zones = _resolve_zones(high_risk_zones)
     if track is None:
-        track = _with_injection(voyage, high_risk_zones)
+        # No real multi-point AIS track available (synthetic-fleet case) →
+        # honest empty-state. The detector only runs on real caller-supplied
+        # tracks; it never fabricates and scans a reconstructed track.
+        return []
     track = _clean_track(track)
     if len(track) < 2 or not zones:
         return []
@@ -532,13 +482,18 @@ def detect_teleports(
     one of the positions was spoofed. Legs shorter than
     ``_TELEPORT_MIN_LEG_HOURS`` are skipped (their implied speed is too noisy).
 
-    ``track`` lets a caller (or test) supply an explicit ``AisPing`` list to
-    scan directly; ``None`` uses the voyage's modeled-and-perturbed track.
+    ``track`` is the REAL caller-supplied ``AisPing`` list to scan (e.g. a live
+    AIS feed). When ``None`` there is no real track to scan — a synthetic voyage
+    holds only a single position, so we return ``[]`` (an honest empty-state)
+    rather than fabricating + scanning a reconstructed track that would
+    manufacture teleports no real ship produced.
 
-    MODELED — the kinematics are real; the voyage is synthetic.
+    The kinematics are real; this detector only runs on real tracks.
     """
     if track is None:
-        track = _with_injection(voyage, None)
+        # No real multi-point AIS track available (synthetic-fleet case) →
+        # honest empty-state. See detect_gaps for the rationale.
+        return []
     track = _clean_track(track)
     if len(track) < 2:
         return []
@@ -590,23 +545,14 @@ def detect_teleports(
     return out
 
 
-def _with_injection(voyage, high_risk_zones):
-    """Build the voyage's (modeled) track and inject the illustrative anomaly.
-
-    Centralised so ``detect_gaps`` / ``detect_teleports`` / ``assess_voyage``
-    all see the SAME perturbed track for a given voyage. Never raises.
-    """
-    track = voyage_ping_track(voyage)
-    if not track:
-        return []
-    zones = _resolve_zones(high_risk_zones)
-    return _inject_modeled_anomaly(voyage, track, zones)
-
-
 def assess_voyage(voyage, *, high_risk_zones: Optional[Iterable] = None) -> list[AisAnomaly]:
     """Run both detectors on a voyage and return the combined anomaly list.
 
-    Pure, deterministic, never raises. A clean voyage → empty list.
+    Pure, deterministic, never raises. With no real AIS track passed through
+    (the synthetic-fleet case), both detectors short-circuit to ``[]``, so a
+    synthetic voyage → empty list — an honest empty-state, NOT a manufactured
+    finding. (A live-feed integration would route real tracks into the
+    detectors' ``track=`` param.)
     """
     try:
         out: list[AisAnomaly] = []
@@ -626,7 +572,12 @@ def scan_fleet(
 
     Returns anomalies ordered CRITICAL → LOW then by kind, so the worst
     surface first. Pure, deterministic, never raises — a bad element is
-    skipped, not fatal. MODELED.
+    skipped, not fatal.
+
+    On the SYNTHETIC voyage fleet there is no real AIS track to scan, so this
+    returns ``[]`` — an honest empty-state, not a manufactured finding. Real
+    findings appear only once a live AIS feed supplies real tracks to the
+    detectors.
     """
     sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     anomalies: list[AisAnomaly] = []
