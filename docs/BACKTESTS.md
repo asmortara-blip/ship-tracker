@@ -12,17 +12,45 @@ This page is the **operator-facing reference** — the table below is
 regenerated from the current validator state and shows the headline KPI
 for each module on the bundled synthetic-history generators.
 
+### Three stacked CI gates
+
+| Gate | Flag | Fails when… |
+| --- | --- | --- |
+| Floor | `--strict` | a validator's boolean `healthy` flag is False (hardcoded floor, e.g. best sign-agreement `>= 0.55`) |
+| Snapshot drift | `--compare-baseline docs/backtest-baseline.json` | **any** raw field drifts beyond tolerance, in **either** direction (two-sided) |
+| **Headline drift (R027)** | `--drift-strict` | a validator's **headline** metric **regresses** past its per-metric tolerance — **one-sided, direction-aware** (improvements never fail) |
+
+The floor gate is one-sided and blind above the floor: chokepoint
+sign-agreement sliding `80.5% → 56%` stays `healthy` and passes `--strict`
+silently. **R027's `--drift-strict`** closes that hole — it pins each
+validator's headline metric to `docs/backtest-headline-baseline.json` and
+fails only on a worsening move past tolerance. `--drift-strict` implies
+`--strict`, so it enforces both the floor and the headline-drift gate.
+
+**Direction + tolerance** are committed per metric in
+`docs/backtest-headline-baseline.json`. `higher_better` metrics
+(sign-agreement, recovery / pass rates, spreads) breach on a **drop** past
+tolerance; `lower_better` metrics (delay MAE) breach on a **rise**.
+Tolerances: `0.05` (5 pts) for rate/spread fractions and recovery/pass
+rates; `0.02` for tight calibration spreads (leading-indicator / news
+bullish-vs-bearish, forecast 30d MAE); `0.30` day for ETA delay MAE. VaR
+Coverage is intentionally **not** pinned (its basis flips real/synthetic
+with the live price cache).
+
 To refresh this page after deliberate validator changes:
 
 ```bash
-# 1. Regenerate the snapshot the CI drift gate compares against:
+# 1. Regenerate the snapshot the two-sided drift gate compares against:
 python -m tools.backtests --save-baseline docs/backtest-baseline.json
+
+# 1b. Re-mint the R027 headline-drift baseline (after an INTENTIONAL model change):
+python -m tools.backtests --update-headline-baseline
 
 # 2. Regenerate this page's status table:
 python -m tools.backtests --format markdown > /tmp/table.md
 
 # 3. Paste /tmp/table.md into the "Current health snapshot" section
-#    below and commit both files in the same PR.
+#    below and commit all three files in the same PR.
 ```
 
 ---
