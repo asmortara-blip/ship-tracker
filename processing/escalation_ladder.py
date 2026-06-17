@@ -420,3 +420,88 @@ def ladder_expected_scores(
     for key, cp in dict(registry).items():
         out[key] = expected_risk_for_chokepoint(cp, horizon=horizon)
     return out
+
+
+# ---------------------------------------------------------------------------
+# escalation_alert_signals — early-warning signals from the forward path
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EscalationSignal:
+    """One chokepoint whose MODELED forward escalation warrants an early warning.
+
+    Attributes
+    ----------
+    key            chokepoint registry key.
+    current_state  ladder rung the chokepoint currently sits at.
+    forward_score  modeled forward expected severity (the ladder).
+    current_score  deterministic composite score (escalation OFF).
+    delta          ``forward_score - current_score`` — the priced escalation tail.
+    severity       ``"CRITICAL"`` at/above the critical threshold, else ``"HIGH"``.
+    horizon        forward steps priced.
+    """
+
+    key: str
+    current_state: str
+    forward_score: float
+    current_score: float
+    delta: float
+    severity: str
+    horizon: int
+
+
+def escalation_alert_signals(
+    current_scores: Mapping[str, float],
+    ladder_results: Mapping[str, "LadderResult"],
+    *,
+    forward_floor: float = 0.40,
+    min_escalation_delta: float = 0.05,
+    critical_threshold: float = 0.70,
+) -> list:
+    """Early-warning signals from the MODELED forward-escalation ladder.
+
+    A signal fires for a chokepoint that is **all three** of:
+
+      (a) genuinely ELEVATED — its ladder rung is past DE_ESCALATING (not a calm
+          passage),
+      (b) modeled forward expected severity clears ``forward_floor``, and
+      (c) sits at least ``min_escalation_delta`` ABOVE its current deterministic
+          composite (``forward - current``).
+
+    In words: the passage is not calm, and the modeled forward path prices real
+    escalation the deterministic snapshot hasn't caught yet — the closure-is-
+    coming early warning, *before* the closure. A calm (DE_ESCALATING) passage
+    never fires, even though its ladder floor sits above its heavily-penalised
+    composite. A passage already deterministically hot (delta ≤ 0 — the ladder
+    can't add) is left to the existing risk alerts, not double-fired here.
+
+    Pure, deterministic, never raises. Severity is CRITICAL at/above
+    ``critical_threshold``, else HIGH. Returned hottest-forward-first.
+    """
+    out: list = []
+    try:
+        for key, res in dict(ladder_results).items():
+            state = getattr(res, "current_state", DE_ESCALATING)
+            if state == DE_ESCALATING:
+                continue
+            fwd = float(getattr(res, "expected_score", 0.0) or 0.0)
+            cur = float(current_scores.get(key, 0.0) or 0.0)
+            delta = fwd - cur
+            if fwd < forward_floor or delta < min_escalation_delta:
+                continue
+            sev = "CRITICAL" if fwd >= critical_threshold else "HIGH"
+            out.append(EscalationSignal(
+                key=str(key),
+                current_state=state,
+                forward_score=round(fwd, 6),
+                current_score=round(cur, 6),
+                delta=round(delta, 6),
+                severity=sev,
+                horizon=int(getattr(res, "horizon", 1)),
+            ))
+    except Exception:  # pragma: no cover - defensive; must never raise
+        logger.debug("escalation_alert_signals: degrading to []")
+        return []
+    out.sort(key=lambda s: s.forward_score, reverse=True)
+    return out

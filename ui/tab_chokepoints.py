@@ -311,6 +311,7 @@ def _render_escalation_outlook() -> None:
         )
         from processing.escalation_ladder import (
             PROVENANCE_NOTE,
+            escalation_alert_signals,
             ladder_expected_scores,
         )
 
@@ -346,6 +347,24 @@ def _render_escalation_outlook() -> None:
             f'{PROVENANCE_NOTE}</div>',
             unsafe_allow_html=True,
         )
+
+        # Early-warning callout: ELEVATED passages whose modeled forward path
+        # prices real escalation ABOVE today's deterministic risk — the
+        # closure-is-coming signal before the closure. Calm and already-hot
+        # passages are excluded by the gate (see escalation_alert_signals).
+        signals = escalation_alert_signals(current, ladder)
+        if signals:
+            names = ", ".join(
+                f"{getattr(CHOKEPOINTS.get(s.key), 'name', s.key)} "
+                f"({s.current_state.replace('_', ' ').title()}, "
+                f"{s.forward_score:.2f} vs {s.current_score:.2f})"
+                for s in signals
+            )
+            st.warning(
+                f"**Forward-escalation early warning** — {len(signals)} elevated "
+                f"passage(s) on a modeled path above current risk: {names}. "
+                "Modeled (Markov ladder), not a feed."
+            )
 
         # One row per chokepoint, sorted hottest-first by forward score.
         rows = []

@@ -21,6 +21,8 @@ opt-in seam into ``chokepoint_analyzer.compute_chokepoint_risk_score``:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from processing.escalation_ladder import (
@@ -31,14 +33,22 @@ from processing.escalation_ladder import (
     PARTIAL,
     TENSION,
     TRANSITION,
+    EscalationSignal,
     LadderResult,
     current_state_for,
+    escalation_alert_signals,
     expected_risk_for_chokepoint,
     expected_risk_score,
     ladder_expected_scores,
     severity,
     state_distribution,
 )
+
+
+def _res(state, forward, horizon=3):
+    """A LadderResult-shaped stand-in for the alert-signal gate tests."""
+    return SimpleNamespace(
+        current_state=state, expected_score=forward, horizon=horizon)
 
 
 # ── 1. Valid Markov matrix ──────────────────────────────────────────────────
@@ -231,3 +241,73 @@ def test_seam_on_only_raises_never_lowers() -> None:
     assert any(fwd[k] > base[k] + 1e-9 for k in base)
     # Still clamped to [0, 1].
     assert all(0.0 <= v <= 1.0 for v in fwd.values())
+
+
+# ── 7. escalation_alert_signals — the early-warning gate ────────────────────
+
+def test_signals_calm_passage_never_fires() -> None:
+    """A calm (DE_ESCALATING) passage never fires, even with a forward score
+    that clears the floor and a large delta — calm is not escalation."""
+    cur = {"x": 0.05}
+    lad = {"x": _res(DE_ESCALATING, 0.60)}
+    assert escalation_alert_signals(
+        cur, lad, forward_floor=0.40, min_escalation_delta=0.05) == []
+
+
+def test_signals_elevated_with_priced_tail_fires() -> None:
+    cur = {"x": 0.20}
+    lad = {"x": _res(TENSION, 0.45)}        # >= 0.40 floor, delta 0.25 >= 0.05
+    sigs = escalation_alert_signals(
+        cur, lad, forward_floor=0.40, min_escalation_delta=0.05)
+    assert len(sigs) == 1
+    s = sigs[0]
+    assert isinstance(s, EscalationSignal)
+    assert s.key == "x" and s.current_state == TENSION
+    assert s.severity == "HIGH"            # 0.45 < critical 0.70
+    assert s.delta == pytest.approx(0.25)
+
+
+def test_signals_below_forward_floor_no_fire() -> None:
+    cur = {"x": 0.05}
+    lad = {"x": _res(TENSION, 0.30)}        # forward 0.30 < 0.40 floor
+    assert escalation_alert_signals(cur, lad, forward_floor=0.40) == []
+
+
+def test_signals_already_hot_no_double_fire() -> None:
+    """Elevated and clears the floor, but the deterministic snapshot already
+    captures it (delta below the min) — left to the existing risk alerts."""
+    cur = {"x": 0.50}
+    lad = {"x": _res(INCIDENT, 0.52)}       # delta 0.02 < 0.05
+    assert escalation_alert_signals(
+        cur, lad, forward_floor=0.40, min_escalation_delta=0.05) == []
+
+
+def test_signals_critical_severity_and_hottest_first() -> None:
+    cur = {"a": 0.20, "b": 0.10}
+    lad = {"a": _res(PARTIAL, 0.75), "b": _res(TENSION, 0.45)}
+    sigs = escalation_alert_signals(
+        cur, lad, forward_floor=0.40, critical_threshold=0.70)
+    assert [s.key for s in sigs] == ["a", "b"]   # hottest forward first
+    assert sigs[0].severity == "CRITICAL"        # 0.75 >= 0.70
+    assert sigs[1].severity == "HIGH"
+
+
+def test_signals_never_raises_on_garbage() -> None:
+    assert escalation_alert_signals({}, {"x": object()}) == []
+
+
+def test_signals_against_live_registry_flag_only_elevated() -> None:
+    """Wired against the real registry + ladder, every flagged signal is a
+    genuinely-elevated passage clearing the forward floor — never a calm one."""
+    from processing.chokepoint_analyzer import (
+        CHOKEPOINTS, compute_chokepoint_risk_score)
+
+    current = compute_chokepoint_risk_score()
+    ladder = ladder_expected_scores(CHOKEPOINTS, horizon=3)
+    sigs = escalation_alert_signals(current, ladder, forward_floor=0.40)
+    for s in sigs:
+        assert s.current_state != DE_ESCALATING
+        assert s.forward_score >= 0.40
+        assert s.delta >= 0.05
+    # An unreachable floor silences everything (the gate is real).
+    assert escalation_alert_signals(current, ladder, forward_floor=0.99) == []
