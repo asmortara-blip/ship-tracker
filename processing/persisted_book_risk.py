@@ -44,11 +44,13 @@ from processing.risk_lab import (
     portfolio_var,
     stress_test_all_scenarios,
 )
+from processing.stress_var import StressVaR, monte_carlo_book_es
 
 __all__ = [
     "PersistedBookRisk",
     "load_persisted_positions",
     "persisted_book_risk",
+    "persisted_book_stress_var",
 ]
 
 
@@ -178,4 +180,55 @@ def persisted_book_risk(
         weights_are_real=weights_are_real, market_value=market_value,
         panel_tickers=panel_tickers, panel_obs=panel_obs,
         panel_is_real=panel_is_real, var=var, scenarios=scenarios,
+    )
+
+
+def persisted_book_stress_var(
+    positions: list[dict],
+    ideas,
+    stock_data,
+    *,
+    confidence: float = 0.95,
+    horizon_days: int = 5,
+    n_sims: int = 10_000,
+    severity: float = 1.0,
+    seed: int = 0,
+) -> Optional[StressVaR]:
+    """Cascade-grounded Monte-Carlo Stress-VaR/ES on the PERSISTED book.
+
+    The platform's coherent, cascade-grounded Stress-VaR/ES
+    (:func:`processing.stress_var.monte_carlo_book_es`, R009) is otherwise run
+    only on a hardcoded equal-weight universe (the Risk Lab tab), while the
+    user's real book sees only the constant-multiplier scenario stress in
+    :func:`persisted_book_risk`. This bridges the two halves that never met: it
+    feeds the DURABLE book's REAL marked weights (``book_exposure.book_weights_detail``,
+    sized by the priced market value) into ``monte_carlo_book_es`` under the REAL
+    live disruption carried by the cascade ``ideas`` — so the user's actual book
+    is finally stressed by the live shock, with exact per-name Euler component-ES
+    attribution.
+
+    ``ideas`` are the scored cascade equity ideas (the same objects the Book-vs-
+    Cascade overlay uses); a held name with no active idea contributes pure market
+    risk (zero shock). Returns ``None`` for an empty / unresolvable book (honest
+    empty-state). Weights are REAL marked market values; dark prices fall back to
+    the StressVaR engine's published diagonal-vol basis (never a fabricated
+    price). Pure + deterministic (fixed ``seed``).
+    """
+    if not positions:
+        return None
+    weights, _weights_are_real = book_weights_detail(positions, stock_data)
+    if not weights:
+        return None
+
+    # Size the dollar tail by the book's priced market value (nominal $1M only
+    # when prices are dark, so the %-tail is still meaningful).
+    bm = mark_book(positions, stock_data)
+    market_value = float(getattr(bm, "market_value", 0.0) or 0.0)
+    pv = market_value if market_value > 0 else 1_000_000.0
+
+    return monte_carlo_book_es(
+        weights, ideas, stock_data,
+        confidence=confidence, horizon_days=horizon_days, n_sims=n_sims,
+        severity=severity, portfolio_value=pv, seed=seed,
+        scenario_name="Cascade stress (persisted book)",
     )

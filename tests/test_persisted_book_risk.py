@@ -17,13 +17,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from types import SimpleNamespace
+
 from processing.persisted_book_risk import (
     PersistedBookRisk,
     load_persisted_positions,
     persisted_book_risk,
+    persisted_book_stress_var,
 )
+from processing.stress_var import StressVaR
 from state import positions as pos
 from state.db import get_connection
+
+
+def _idea(ticker, direction, conviction=0.8):
+    """A duck-typed cascade equity idea (matches what score_equity_ideas emits)."""
+    return SimpleNamespace(
+        ticker=ticker, direction=direction, conviction_score=conviction)
 
 
 # ── DB isolation: each test starts from an empty persisted ledger ───────────
@@ -188,3 +198,62 @@ def test_source_has_no_rng_fabrication() -> None:
     assert "portfolio_var" in src
     assert "stress_test_all_scenarios" in src
     assert "returns_panel" in src
+
+
+# ── 6. Cascade Stress-VaR/ES on the REAL persisted book (extends R125) ───────
+
+def test_stress_var_on_real_book_euler_and_signed() -> None:
+    """The cascade Stress-VaR runs on the REAL marked book over the REAL
+    covariance (basis='real-cov'), the per-name component-ES sums to es_pct
+    EXACTLY (Euler), the tail is signed (es_pct <= var_pct), and the dollar
+    tail is sized by the priced market value."""
+    pos.replace_positions("alice", _BOOK)
+    positions = load_persisted_positions("alice")
+    sd = _stock_data()
+    ideas = [_idea("ZIM", "Bearish", 0.9)]
+
+    sv = persisted_book_stress_var(positions, ideas, sd, seed=7)
+    assert isinstance(sv, StressVaR)
+    assert sv.basis == "real-cov"           # real 260d covariance, not vol fallback
+    assert sv.n_names == 3
+    # Euler identity: components sum to the whole-book ES exactly.
+    assert sum(sv.component_es_pct.values()) == pytest.approx(sv.es_pct, abs=1e-6)
+    # Signed tail — ES is never "better" than VaR.
+    assert sv.es_pct <= sv.var_pct
+    # Dollar tail sized by the book's priced market value.
+    risk = persisted_book_risk(positions, sd)
+    assert sv.portfolio_value == pytest.approx(risk.market_value)
+    assert sv.var_dollar == pytest.approx(sv.var_pct * sv.portfolio_value)
+
+
+def test_stress_var_empty_book_is_none() -> None:
+    assert persisted_book_stress_var([], [_idea("ZIM", "Bearish")], _stock_data()) is None
+
+
+def test_stress_var_bearish_idea_flows_into_the_tail() -> None:
+    """A bearish idea on a HELD name pushes the book's expected P&L negative
+    vs the no-idea (pure-market) book — the live shock actually reaches the
+    real book's risk, the whole point of the bridge."""
+    pos.replace_positions("bob", _BOOK)
+    positions = load_persisted_positions("bob")
+    sd = _stock_data()
+
+    none = persisted_book_stress_var(positions, [], sd, seed=3)
+    bear = persisted_book_stress_var(
+        positions, [_idea("ZIM", "Bearish", 0.9)], sd, seed=3)
+    # No ideas → ~zero drift; a bearish ZIM shock drags the mean P&L down.
+    assert bear.mean_pnl_pct < none.mean_pnl_pct
+    # ZIM owns a real share of the (more negative) tail.
+    assert bear.component_es_pct.get("ZIM", 0.0) < 0.0
+
+
+def test_stress_var_deterministic_across_runs() -> None:
+    pos.replace_positions("carol", _BOOK)
+    positions = load_persisted_positions("carol")
+    sd = _stock_data(seed=11)
+    ideas = [_idea("ZIM", "Bearish", 0.7), _idea("SBLK", "Bullish", 0.5)]
+    a = persisted_book_stress_var(positions, ideas, sd, seed=5)
+    b = persisted_book_stress_var(positions, ideas, sd, seed=5)
+    assert a.var_dollar == b.var_dollar
+    assert a.es_pct == b.es_pct
+    assert a.component_es_pct == b.component_es_pct

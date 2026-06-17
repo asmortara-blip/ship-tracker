@@ -772,7 +772,7 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
         logger.warning(f"risk metrics error: {e}")
 
 
-def _render_persisted_book_risk(stock_data=None) -> None:
+def _render_persisted_book_risk(stock_data=None, macro_data=None, insights=None) -> None:
     """Live-book VaR/ES + per-scenario stress on the PERSISTED book (R125).
 
     The OMS-risk-desk view: load the current user's DURABLE book from
@@ -791,6 +791,7 @@ def _render_persisted_book_risk(stock_data=None) -> None:
         from processing.persisted_book_risk import (
             load_persisted_positions,
             persisted_book_risk,
+            persisted_book_stress_var,
         )
         from state.user_scope import current_user_id
 
@@ -896,6 +897,81 @@ def _render_persisted_book_risk(stock_data=None) -> None:
                 margin={"l": 12, "r": 80, "t": 46, "b": 30},
             )
             st.plotly_chart(fig, use_container_width=True, key="persisted_book_stress")
+
+        # ── Cascade Stress-VaR/ES: live disruption × the REAL marked book ─────
+        # The platform's coherent cascade-grounded Monte-Carlo Stress-VaR (R009)
+        # is otherwise run only on a hardcoded equal-weight universe (Risk Lab).
+        # Here it runs on the user's REAL book under the live cascade shock, with
+        # exact per-name Euler ES — the missing half no scenario multiplier shows.
+        try:
+            ideas = []
+            try:
+                from processing.disruption_cascade import score_equity_ideas
+                from processing.exposure_matrix import build_exposure_matrix
+                from processing.shipping_stress_index import compute_shipping_stress
+                stress = compute_shipping_stress({}, macro_data or {}, [], [])
+                exposure = build_exposure_matrix(stock_data or {})
+                ideas = score_equity_ideas(stress, exposure, stock_data or {}, insights)
+            except Exception as ie:
+                logger.debug(f"persisted stress-var ideas unavailable: {ie}")
+
+            sv = persisted_book_stress_var(positions, ideas, stock_data or {})
+            if sv is not None and sv.basis != "empty":
+                st.markdown(
+                    '<div class="sub-section-header">Cascade Stress-VaR '
+                    '— live disruption × your book</div>',
+                    unsafe_allow_html=True,
+                )
+                n_shocked = sum(1 for v in sv.shocks_pct.values() if abs(v) > 1e-9)
+                var_acc = C_LOW if sv.var_pct < 0 else C_HIGH
+                es_acc = C_LOW if sv.es_pct < 0 else C_HIGH
+                mean_acc = (C_LOW if sv.mean_pnl_pct < 0
+                            else (C_HIGH if sv.mean_pnl_pct > 0 else C_TEXT3))
+                metric_card_row([
+                    {"label": f"Stress-VaR ({sv.confidence*100:.0f}%, {sv.horizon_days}d)",
+                     "value": f"{sv.var_pct*100:+.2f}%", "accent": var_acc,
+                     "sublabel": f"{_fmt_dollar(sv.var_dollar)} · {sv.basis}"},
+                    {"label": "Stress-ES (tail mean)",
+                     "value": f"{sv.es_pct*100:+.2f}%", "accent": es_acc,
+                     "sublabel": f"{_fmt_dollar(sv.es_dollar)} expected tail"},
+                    {"label": "Expected P&L under shock",
+                     "value": f"{sv.mean_pnl_pct*100:+.2f}%", "accent": mean_acc,
+                     "sublabel": "cascade-grounded mean"},
+                    {"label": "Names Shocked",
+                     "value": f"{n_shocked} / {sv.n_names}", "accent": C_ACCENT,
+                     "sublabel": "held names with a live cascade idea"},
+                ], columns=4)
+
+                # Per-name Euler ES contributions — exposes a hidden shared bet.
+                if sv.component_es_pct and sv.es_pct != 0:
+                    contrib = sorted(sv.component_es_pct.items(),
+                                     key=lambda kv: abs(kv[1]), reverse=True)[:8]
+                    rows = []
+                    for tkr, ces in contrib:
+                        wt = risk.weights.get(tkr, 0.0)
+                        shk = sv.shocks_pct.get(tkr, 0.0)
+                        share = (ces / sv.es_pct * 100) if sv.es_pct else 0.0
+                        rows.append([
+                            _sans(tkr, color=C_TEXT, weight=700),
+                            _mono(f"{wt*100:.1f}%", color=C_TEXT2),
+                            _mono(f"{shk*100:+.1f}%", color=(
+                                C_LOW if shk < 0 else (C_HIGH if shk > 0 else C_TEXT3))),
+                            _mono(_fmt_dollar(ces * sv.portfolio_value),
+                                  color=C_LOW if ces < 0 else C_HIGH),
+                            _mono(f"{share:.0f}%", color=C_TEXT2),
+                        ])
+                    wsj_market_table(
+                        ["Name", "Weight", "Cascade Shock",
+                         "ES Contribution", "Share of Tail"], rows)
+                    st.caption(
+                        "Per-name Euler decomposition of the expected tail loss — "
+                        "contributions sum to the book ES exactly, so a tail "
+                        "dominated by a few names exposes a hidden shared bet. "
+                        "Cascade-grounded Monte-Carlo on your REAL marked book; the "
+                        "shocks are the modeled disruption cascade, not a feed."
+                    )
+        except Exception as se:
+            logger.debug(f"persisted-book stress-var section skipped: {se}")
 
         weight_note = ("real marked weights" if risk.weights_are_real
                        else "equal-weight fallback (prices dark)")
@@ -1779,7 +1855,7 @@ def render(stock_data, macro_data, insights) -> None:
             # R125 — live-book VaR + per-scenario stress on the PERSISTED book
             # (state.positions), the OMS-risk-desk view. Distinct from the
             # session-book risk strip above.
-            _render_persisted_book_risk(stock_data)
+            _render_persisted_book_risk(stock_data, macro_data, insights)
 
             _render_book_cascade(positions, stock_data, macro_data, insights)
 
