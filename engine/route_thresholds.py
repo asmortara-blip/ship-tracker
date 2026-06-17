@@ -258,9 +258,108 @@ def get_threshold_for_route(route_id: str, default: float = 8.0) -> float:
     return float(rt.threshold_pct)
 
 
+@dataclass
+class ThresholdWriteResult:
+    """Outcome of a single-key threshold write, carrying enough to undo it.
+
+    Fields:
+        ok:         Whether the write was persisted (the save returned True).
+        key:        The store key written (a route_id OR an alert_type — the
+                    store is a generic key→threshold map; see
+                    ``set_threshold_for_key``).
+        new_value:  The threshold_pct that was written.
+        prior_value: The threshold_pct that was in the store *before* this
+                    write, or None if no override existed for the key. This
+                    is what makes the write reversible — to undo, call
+                    ``set_threshold_for_key(key, prior_value)`` (or delete
+                    the override when prior_value is None).
+        had_prior:  True iff an override already existed for the key. Lets the
+                    caller distinguish "prior was None because absent" from a
+                    legitimately stored value.
+    """
+    ok: bool
+    key: str
+    new_value: float
+    prior_value: float | None = None
+    had_prior: bool = False
+
+
+def set_threshold_for_key(
+    key: str,
+    threshold_pct: float,
+    *,
+    severity: str | None = None,
+) -> ThresholdWriteResult:
+    """Best-effort, validated, reversible single-key threshold write.
+
+    The override store (``kv_state['route_thresholds']``) is a generic
+    ``key → RouteThreshold`` map. The key was historically a ``route_id``;
+    this helper makes it explicit that any opaque string key works — the
+    self-tuning loop (``engine.alert_backtest.apply_recommended_threshold``)
+    keys it by ``alert_type`` so a recommended STOCK_MOVE / BDI_MOVE /
+    RATE_SURGE threshold lands in the same store the rate detector already
+    reads.
+
+    Validation:
+      - ``key`` must be a non-empty string after ``str().strip()``.
+      - ``threshold_pct`` must coerce to a finite float. NaN / inf / a
+        non-numeric value → no write, ``ok=False``.
+      - ``severity`` (when given) is normalized via ``_normalize_severity``;
+        an unknown severity falls back to the default rather than rejecting
+        the write. When ``severity`` is None the existing override's severity
+        is preserved (or the default when the key is new).
+
+    Reversibility: the returned ``ThresholdWriteResult`` carries the prior
+    threshold_pct (``prior_value`` / ``had_prior``) so the caller can restore
+    the previous state. Never raises — a load/encode/write failure returns
+    ``ok=False`` with the prior captured when it was readable.
+    """
+    skey = str(key).strip() if key is not None else ""
+    # Validate the value up front — never write NaN / inf / junk.
+    try:
+        value = float(threshold_pct)
+    except (TypeError, ValueError):
+        logger.debug(f"set_threshold_for_key: non-numeric threshold for {skey!r}")
+        return ThresholdWriteResult(ok=False, key=skey, new_value=0.0)
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
+        logger.debug(f"set_threshold_for_key: non-finite threshold for {skey!r}")
+        return ThresholdWriteResult(ok=False, key=skey, new_value=value)
+    if not skey:
+        logger.debug("set_threshold_for_key: empty key rejected")
+        return ThresholdWriteResult(ok=False, key=skey, new_value=value)
+
+    # Capture the prior so the write is reversible.
+    overrides = load_route_thresholds()
+    prior_rt = overrides.get(skey)
+    prior_value = float(prior_rt.threshold_pct) if prior_rt is not None else None
+    had_prior = prior_rt is not None
+
+    # Preserve the existing severity unless the caller overrides it.
+    if severity is not None:
+        new_severity = _normalize_severity(severity)
+    elif prior_rt is not None:
+        new_severity = _normalize_severity(prior_rt.severity)
+    else:
+        new_severity = _DEFAULT_SEVERITY
+
+    overrides[skey] = RouteThreshold(
+        route_id=skey, threshold_pct=value, severity=new_severity,
+    )
+    ok = save_route_thresholds(overrides)
+    return ThresholdWriteResult(
+        ok=bool(ok),
+        key=skey,
+        new_value=value,
+        prior_value=prior_value,
+        had_prior=had_prior,
+    )
+
+
 __all__ = [
     "RouteThreshold",
+    "ThresholdWriteResult",
     "load_route_thresholds",
     "save_route_thresholds",
     "get_threshold_for_route",
+    "set_threshold_for_key",
 ]
