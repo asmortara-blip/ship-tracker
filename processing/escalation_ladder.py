@@ -482,14 +482,21 @@ def escalation_alert_signals(
     out: list = []
     try:
         for key, res in dict(ladder_results).items():
+            # Gate (a) — must be ELEVATED. A calm passage is skipped even if its
+            # ladder floor happens to beat its penalised composite: calm != escalating.
             state = getattr(res, "current_state", DE_ESCALATING)
             if state == DE_ESCALATING:
                 continue
-            fwd = float(getattr(res, "expected_score", 0.0) or 0.0)
-            cur = float(current_scores.get(key, 0.0) or 0.0)
-            delta = fwd - cur
+            fwd = float(getattr(res, "expected_score", 0.0) or 0.0)   # modeled forward severity
+            cur = float(current_scores.get(key, 0.0) or 0.0)          # today's deterministic risk
+            delta = fwd - cur                                          # the priced escalation tail
+            # Gate (b) forward clears the floor, AND (c) the ladder adds REAL forward
+            # risk above today's snapshot. A delta <= 0 means the snapshot already
+            # captures it (an already-hot passage) — leave that to the risk alerts.
             if fwd < forward_floor or delta < min_escalation_delta:
                 continue
+            # Severity ladders off the forward (not current) severity — this is a
+            # forward-looking signal about where the passage is HEADING.
             sev = "CRITICAL" if fwd >= critical_threshold else "HIGH"
             out.append(EscalationSignal(
                 key=str(key),

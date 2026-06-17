@@ -943,13 +943,18 @@ def _render_persisted_book_risk(stock_data=None, macro_data=None, insights=None)
                 ], columns=4)
 
                 # Per-name Euler ES contributions — exposes a hidden shared bet.
+                # component_es_pct[name] is that name's share of the book's tail
+                # loss; the parts sum to es_pct EXACTLY (Euler decomposition), so a
+                # tail dominated by a few names = a concentrated bet hiding in plain
+                # sight. Show the top 8 by absolute contribution.
                 if sv.component_es_pct and sv.es_pct != 0:
                     contrib = sorted(sv.component_es_pct.items(),
                                      key=lambda kv: abs(kv[1]), reverse=True)[:8]
                     rows = []
                     for tkr, ces in contrib:
-                        wt = risk.weights.get(tkr, 0.0)
-                        shk = sv.shocks_pct.get(tkr, 0.0)
+                        wt = risk.weights.get(tkr, 0.0)          # book weight of this name
+                        shk = sv.shocks_pct.get(tkr, 0.0)        # the live cascade shock applied to it
+                        # This name's % of the whole-book tail (component / book ES).
                         share = (ces / sv.es_pct * 100) if sv.es_pct else 0.0
                         rows.append([
                             _sans(tkr, color=C_TEXT, weight=700),
