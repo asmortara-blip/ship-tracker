@@ -63,6 +63,14 @@ _SRC_RATE_PREMIUM = DataSource.modeled(
 _SRC_HISTORICAL = DataSource.modeled(
     "Maritime incident archive · academic + trade-press"
 )
+_SRC_ESCALATION = DataSource.modeled(
+    "Modeled escalation ladder (R034) — probabilistic forward-escalation "
+    "refinement of the deterministic chokepoint risk",
+    notes=(
+        "Conservative, published per-state Markov transition probabilities — "
+        "NOT a fitted hazard model and NOT an observed feed."
+    ),
+)
 
 
 # ── Static data ─────────────────────────────────────────────────────────────
@@ -141,6 +149,15 @@ _RISK_COLORS = {
     "HIGH":      _C_ORANGE,
     "MODERATE":  C_MOD,
     "LOW":       C_HIGH,
+}
+
+# Ladder-state badge colors (low → high severity), aligned to the risk palette.
+_LADDER_STATE_COLORS = {
+    "DE_ESCALATING": C_HIGH,
+    "TENSION":       C_MOD,
+    "INCIDENT":      _C_ORANGE,
+    "PARTIAL":       C_LOW,
+    "CLOSURE":       C_LOW,
 }
 
 _HOUTHI_INCIDENTS = [
@@ -276,6 +293,130 @@ def _render_status_board() -> None:
     except Exception as e:
         logger.error(f"status_board render error: {e}")
         st.error("Chokepoint status board unavailable.")
+
+
+# ── Section 1b: Forward Escalation Outlook (R034) ───────────────────────────
+#
+# Surfaces processing/escalation_ladder.py: a MODELED probabilistic refinement
+# of the deterministic chokepoint risk. We show, per chokepoint, the current
+# ladder state, the deterministic "current" score, the modeled forward expected
+# score (the Markov ladder rolled `horizon` steps), and the delta. This is a
+# modeled overlay — NOT a feed and NOT a fitted model — and is labelled as such.
+
+def _render_escalation_outlook() -> None:
+    try:
+        from processing.chokepoint_analyzer import (
+            CHOKEPOINTS,
+            compute_chokepoint_risk_score,
+        )
+        from processing.escalation_ladder import (
+            PROVENANCE_NOTE,
+            ladder_expected_scores,
+        )
+
+        section_header(
+            "Forward Escalation Outlook",
+            subtitle="Modeled probability-weighted forward risk per chokepoint — "
+                     "a Markov escalation ladder priced over the next step(s)",
+        )
+
+        # Horizon selector (1–4 steps; each step ≈ one weekly review). Keyed
+        # uniquely so it never collides with another widget on the page.
+        horizon = st.slider(
+            "Forward horizon (steps)",
+            min_value=1,
+            max_value=4,
+            value=1,
+            key="chokepoint_escalation_horizon",
+            help="Number of ~weekly review steps to roll the modeled "
+                 "escalation ladder forward.",
+        )
+
+        # Deterministic "current" score, the forward-blended score, and the
+        # raw ladder results — all keyed identically to CHOKEPOINTS.
+        current = compute_chokepoint_risk_score()
+        forward = compute_chokepoint_risk_score(
+            escalation_ladder=True, ladder_horizon=horizon
+        )
+        ladder = ladder_expected_scores(CHOKEPOINTS, horizon=horizon)
+
+        # Short modeled-provenance caption (trimmed PROVENANCE_NOTE).
+        st.markdown(
+            f'<div class="wsj-body" style="color:{C_TEXT3};">'
+            f'{PROVENANCE_NOTE}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # One row per chokepoint, sorted hottest-first by forward score.
+        rows = []
+        chart_names: list[str] = []
+        chart_scores: list[float] = []
+        for key, cp in sorted(
+            CHOKEPOINTS.items(),
+            key=lambda kv: forward.get(kv[0], 0.0),
+            reverse=True,
+        ):
+            res = ladder.get(key)
+            state = res.current_state if res is not None else "DE_ESCALATING"
+            cur_score = current.get(key, 0.0)
+            fwd_score = forward.get(key, 0.0)
+            delta = fwd_score - cur_score
+            state_color = _LADDER_STATE_COLORS.get(state, C_TEXT2)
+            delta_color = C_LOW if delta > 1e-6 else C_TEXT3
+            rows.append([
+                _sans(cp.name, color=C_TEXT, weight=700),
+                badge(state, color=state_color),
+                _mono(f"{cur_score:.3f}", color=C_TEXT2),
+                _mono(f"{fwd_score:.3f}", color=C_MOD),
+                _mono(f"{delta:+.3f}", color=delta_color),
+            ])
+            chart_names.append(cp.name)
+            chart_scores.append(fwd_score)
+
+        wsj_market_table(
+            headers=[
+                "Chokepoint", "Current Ladder State",
+                "Current Risk (det.)", "Forward Expected (modeled)", "Δ (fwd − cur)",
+            ],
+            rows=rows,
+        )
+
+        # Horizontal bar: modeled forward expected score per chokepoint
+        # (hottest on top — reverse the descending lists for a top-down read).
+        try:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=list(reversed(chart_scores)),
+                y=list(reversed(chart_names)),
+                orientation="h",
+                marker=dict(color=C_MOD, line=dict(width=0)),
+                hovertemplate="<b>%{y}</b><br>forward expected: "
+                              "%{x:.3f}<extra></extra>",
+            ))
+            apply_dark_layout(fig, height=320)
+            fig.update_layout(
+                title=dict(
+                    text=f"Modeled Forward Expected Risk (horizon {horizon})",
+                    font=dict(color=C_TEXT, size=13), x=0.02,
+                ),
+                xaxis=dict(
+                    range=[0, 1], gridcolor=C_BORDER,
+                    tickfont=dict(color=C_TEXT2), title="Expected severity [0–1]",
+                ),
+                yaxis=dict(tickfont=dict(color=C_TEXT2)),
+                margin=dict(l=0, r=10, t=40, b=0),
+            )
+            st.plotly_chart(
+                fig, use_container_width=True,
+                key="chokepoint_escalation_bar",
+            )
+        except Exception as ce:
+            logger.warning(f"escalation_outlook chart skipped: {ce}")
+
+        st.markdown(source_footer([_SRC_ESCALATION]), unsafe_allow_html=True)
+    except Exception as e:
+        logger.warning(f"escalation_outlook render error: {e}")
+        st.error("Forward escalation outlook unavailable.")
 
 
 # ── Section 2: Canal Deep Dives ─────────────────────────────────────────────

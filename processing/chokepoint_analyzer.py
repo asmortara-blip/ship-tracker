@@ -295,7 +295,11 @@ def risk_color(level: str) -> str:
 # compute_chokepoint_risk_score
 # ---------------------------------------------------------------------------
 
-def compute_chokepoint_risk_score() -> dict[str, float]:
+def compute_chokepoint_risk_score(
+    *,
+    escalation_ladder: bool = False,
+    ladder_horizon: int = 1,
+) -> dict[str, float]:
     """
     Return a composite risk score [0, 1] for every chokepoint.
 
@@ -306,7 +310,41 @@ def compute_chokepoint_risk_score() -> dict[str, float]:
         alt_penalty  = 1 / max(1, len(alternatives))  (fewer alts => higher risk)
         composite    = base_score * disrupt_mult * (1 + trade_weight) * (1 + alt_penalty) / 4
         clamped to [0, 1]
+
+    Escalation-ladder seam (R034) — OPT-IN, DEFAULT-COMPATIBLE
+    ---------------------------------------------------------
+    With ``escalation_ladder=False`` (the default) this function is BYTE-FOR-BYTE
+    the original deterministic model — the SSI and every existing test see the
+    exact same numbers.
+
+    With ``escalation_ladder=True`` we blend in the MODELED probabilistic
+    forward-escalation score from :mod:`processing.escalation_ladder`. That layer
+    maps each chokepoint's ``current_risk_level`` / ``current_disruption_type`` to
+    a ladder rung (DE_ESCALATING → TENSION → INCIDENT → PARTIAL → CLOSURE) and
+    rolls a conservative, *published* Markov chain ``ladder_horizon`` step(s)
+    forward, yielding a probability-weighted expected severity. We blend by
+    ``max(deterministic, ladder_expected)`` so a chokepoint with a real escalation
+    path scores ABOVE its current deterministic level (markets price the tail)
+    while the ladder can never DROP a score below its deterministic floor.
+
+    HONESTY: the ladder is a MODELED refinement (conservative published
+    transition probabilities — not a fitted hazard model, not a feed); see
+    ``escalation_ladder.PROVENANCE_NOTE``. It composes cleanly with the R007/R014
+    live overlay: that overlay escalates ``current_risk_level`` from REAL signal
+    *first*, and the ladder then prices the forward path off whatever level the
+    chokepoint currently sits at — it reads the level, never mutates the registry.
     """
+    ladder_results: dict = {}
+    if escalation_ladder:
+        try:
+            from processing.escalation_ladder import ladder_expected_scores
+            ladder_results = ladder_expected_scores(
+                CHOKEPOINTS, horizon=ladder_horizon
+            )
+        except Exception:  # pragma: no cover - defensive; never break the base
+            logger.exception("escalation ladder overlay failed; using base only")
+            ladder_results = {}
+
     scores: dict[str, float] = {}
     for key, cp in CHOKEPOINTS.items():
         base = _RISK_SCORE.get(cp.current_risk_level, 0.1)
@@ -315,7 +353,16 @@ def compute_chokepoint_risk_score() -> dict[str, float]:
         n_alts = max(1, len(cp.strategic_alternatives))
         alt_pen = 1.0 / n_alts
         raw = base * d_mult * (1.0 + trade_w) * (1.0 + alt_pen) / 4.0
-        scores[key] = min(1.0, raw)
+        composite = min(1.0, raw)
+
+        if escalation_ladder:
+            ladder = ladder_results.get(key)
+            ladder_expected = getattr(ladder, "expected_score", 0.0) if ladder else 0.0
+            # max() blend: the ladder can only RAISE risk (price the escalation
+            # tail), never lower the deterministic floor.
+            composite = min(1.0, max(composite, ladder_expected))
+
+        scores[key] = composite
         logger.debug(
             "Chokepoint risk score | {} => {:.3f} "
             "(base={:.2f}, trade_w={:.2f}, d_mult={:.2f}, alt_pen={:.2f})",
