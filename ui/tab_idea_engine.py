@@ -806,6 +806,45 @@ def _render_position_sizing(ideas: list, stock_data=None) -> None:
     wsj_market_table(headers, rows)
     st.caption(book.provenance)
 
+    # ── Signed long/short risk on the sized book (R255) ──────────────────────
+    # The sizer emits a GENUINE long/short book (Bearish -> negative weight);
+    # size its risk correctly so shorts net against longs — the convex long-only
+    # VaR paths (which renormalise Σw=1 and drop shorts) cannot express that.
+    try:
+        from processing.sized_book_risk import sized_book_var
+
+        sbr = sized_book_var(book, returns)
+        if sbr.basis == "real" and sbr.n_observations > 0:
+            st.markdown(
+                '<div class="sub-section-header">Sized-book risk '
+                '(signed long/short)</div>',
+                unsafe_allow_html=True,
+            )
+            metric_card_row(
+                [
+                    {"label": "Book VaR (95%, 1d)",
+                     "value": f"{sbr.var_pct * 100:+.2f}%", "accent": C_LOW,
+                     "sublabel": f"{sbr.n_observations}d real panel"},
+                    {"label": "Book CVaR (95%)",
+                     "value": f"{sbr.cvar_pct * 100:+.2f}%", "accent": C_LOW,
+                     "sublabel": "expected tail loss"},
+                    {"label": "Gross / Net",
+                     "value": f"{sbr.gross_exposure * 100:.0f}% / {sbr.net_exposure * 100:+.0f}%",
+                     "accent": C_TEXT2, "sublabel": "Σ|wᵢ| / Σwᵢ"},
+                    {"label": "Long / Short",
+                     "value": f"{sbr.long_exposure * 100:.0f}% / {sbr.short_exposure * 100:.0f}%",
+                     "accent": C_TEXT2, "sublabel": "shorts hedge longs"},
+                ],
+                columns=4,
+            )
+            st.caption(
+                "Signed-weight VaR/ES on the REAL look-ahead-free panel — a "
+                "market-neutral pair nets toward ~0, which the long-only book "
+                "VaR cannot show. No fabrication; empty book → no strip."
+            )
+    except Exception:
+        logger.debug("Idea Engine — sized-book risk strip skipped")
+
 
 # ─── Main render ────────────────────────────────────────────────────────────
 

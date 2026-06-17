@@ -366,6 +366,35 @@ def _render_escalation_outlook() -> None:
                 "Modeled (Markov ladder), not a feed."
             )
 
+        # Expected closure cost (R258) — fuse P(reach CLOSURE within horizon)
+        # with the CONDITIONAL closure impact: expected = probability × severity.
+        # This is the decision-grade number the bare risk score never gives.
+        try:
+            from processing.closure_scenario import expected_closure_impacts
+
+            cost = expected_closure_impacts(CHOKEPOINTS, horizon=horizon)
+            ranked = sorted(
+                cost.values(),
+                key=lambda c: abs(getattr(c, "expected_rate_impact_pct", 0.0)),
+                reverse=True,
+            )[:3]
+            shown = [c for c in ranked
+                     if abs(getattr(c, "expected_rate_impact_pct", 0.0)) > 1e-9]
+            if shown:
+                parts = "; ".join(
+                    f"{getattr(CHOKEPOINTS.get(c.chokepoint_key), 'name', c.chokepoint_key)}: "
+                    f"P(closure) {c.p_closure * 100:.0f}% × {c.conditional_rate_impact_pct:+.0f}% "
+                    f"→ {c.expected_rate_impact_pct:+.1f}% expected freight-rate impact"
+                    for c in shown
+                )
+                st.markdown(
+                    f'<div class="wsj-body" style="color:{C_TEXT3};">'
+                    f'<b>Expected closure cost (modeled)</b> — {parts}.</div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception as ce:
+            logger.debug(f"expected closure cost readout skipped: {ce}")
+
         # One row per chokepoint, sorted hottest-first by forward score.
         rows = []
         chart_names: list[str] = []
