@@ -200,6 +200,11 @@ class ShippingStressReport:
     # (R007): {canal: {"realness": "live"|"modeled", "risk_level", "status"}}.
     canal_data_realness: dict = field(default_factory=dict)
 
+    # Forward-escalation overlay marker (R034). Empty when the overlay is off
+    # (default); when on, {"enabled": True, "horizon": int, "provenance":
+    # "modeled", "note": ...} so consumers label the modeled blend honestly.
+    escalation_overlay: dict = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Internal numeric helper
@@ -214,7 +219,9 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
 # Component scorers — one private helper per SSI component
 # ---------------------------------------------------------------------------
 
-def _route_chokepoint_stress(route_id: str) -> tuple[float, list[str]]:
+def _route_chokepoint_stress(
+    route_id: str, escalation_horizon: int | None = None,
+) -> tuple[float, list[str]]:
     """Chokepoint-disruption stress for *route_id*.
 
     Returns ``(stress, affected_chokepoints)`` where ``stress`` is in [0, 1]
@@ -228,12 +235,24 @@ def _route_chokepoint_stress(route_id: str) -> tuple[float, list[str]]:
     disrupted chokepoints touching the lane (the worst chokepoint dominates),
     with a small additive bump for each extra disrupted chokepoint to reflect
     compounding exposure.
+
+    ``escalation_horizon`` (R034 overlay) — OPT-IN, DEFAULT-NONE. When ``None``
+    the chokepoint scores are the bare deterministic model (byte-for-byte the
+    historical SSI). When set, the scores blend in the MODELED forward-escalation
+    ladder via ``compute_chokepoint_risk_score(escalation_ladder=True,
+    ladder_horizon=...)`` — a max() blend that can only RAISE a chokepoint above
+    its deterministic floor (pricing the escalation tail), never lower it.
     """
     if route_id not in ROUTES_BY_ID:
         return 0.0, []
 
     try:
-        risk_scores = compute_chokepoint_risk_score()
+        if escalation_horizon is not None:
+            risk_scores = compute_chokepoint_risk_score(
+                escalation_ladder=True, ladder_horizon=int(escalation_horizon),
+            )
+        else:
+            risk_scores = compute_chokepoint_risk_score()
     except Exception:  # pragma: no cover - defensive
         logger.exception("compute_chokepoint_risk_score failed")
         return 0.0, []
@@ -619,6 +638,7 @@ def compute_shipping_stress(
     route_results: list,
     voyage_fleet=None,
     canal_stats=None,
+    escalation_horizon: int | None = None,
 ) -> ShippingStressReport:
     """Compute the fleet-wide Shipping Stress Index.
 
@@ -681,7 +701,8 @@ def compute_shipping_stress(
     for route in ROUTES:
         route_id = route.id
 
-        chokepoint_stress, affected_chokepoints = _route_chokepoint_stress(route_id)
+        chokepoint_stress, affected_chokepoints = _route_chokepoint_stress(
+            route_id, escalation_horizon)
         congestion_stress = _route_congestion_stress(route_id, port_results)
         weather_stress = _route_weather_stress(route_id)
         rate_stress = _route_rate_stress(route_id, freight_data)
@@ -766,6 +787,23 @@ def compute_shipping_stress(
         freight_data, macro_data, port_results, route_results, route_stress
     )
 
+    # Forward-escalation overlay provenance (R034). Empty unless the modeled
+    # ladder was blended in, so default reports are unchanged and consumers can
+    # label the blend honestly when it is active.
+    escalation_overlay: dict = {}
+    if escalation_horizon is not None:
+        try:
+            from processing.escalation_ladder import PROVENANCE_NOTE
+            note = PROVENANCE_NOTE
+        except Exception:  # pragma: no cover - defensive
+            note = "MODELED forward-escalation ladder (R034)."
+        escalation_overlay = {
+            "enabled": True,
+            "horizon": int(escalation_horizon),
+            "provenance": "modeled",
+            "note": note,
+        }
+
     logger.debug(
         "compute_shipping_stress: SSI={:.3f} ({}), {} routes, {} disruptions",
         overall_ssi, ssi_label, n_routes, len(top_disruptions),
@@ -781,4 +819,5 @@ def compute_shipping_stress(
         wow_change=0.0,
         data_timestamp=datetime.now(timezone.utc).isoformat(),
         canal_data_realness=canal_realness,
+        escalation_overlay=escalation_overlay,
     )

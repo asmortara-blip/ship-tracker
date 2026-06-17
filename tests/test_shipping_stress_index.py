@@ -206,3 +206,54 @@ def test_component_scores_decompose_overall_ssi() -> None:
     recon = sum(COMPONENT_WEIGHTS[k] * r.component_scores.get(k, 0.0)
                 for k in COMPONENT_WEIGHTS)
     assert recon == pytest.approx(r.overall_ssi, abs=1e-3)
+
+
+# ── Forward-escalation overlay seam (R034 → SSI) ────────────────────────────
+
+def test_escalation_overlay_off_is_byte_for_byte_identical() -> None:
+    """Default (escalation_horizon=None) is the historical SSI exactly — the
+    overlay never perturbs the deterministic index when it is off."""
+    base = compute_shipping_stress({}, {}, [], [])
+    off = compute_shipping_stress({}, {}, [], [], escalation_horizon=None)
+    assert off.overall_ssi == base.overall_ssi
+    assert off.component_scores == base.component_scores
+    assert off.escalation_overlay == {}          # no marker when off
+
+
+def test_escalation_overlay_only_raises_never_lowers() -> None:
+    """The modeled forward-escalation ladder blends via max(det, ladder), so
+    the chokepoint component and the overall index can only RISE, never fall
+    below the deterministic floor."""
+    base = compute_shipping_stress({}, {}, [], [])
+    esc = compute_shipping_stress({}, {}, [], [], escalation_horizon=3)
+    assert esc.overall_ssi >= base.overall_ssi - 1e-12
+    assert (esc.component_scores["chokepoint"]
+            >= base.component_scores["chokepoint"] - 1e-12)
+    assert 0.0 <= esc.overall_ssi <= 1.0
+
+
+def test_escalation_overlay_prices_the_tail_for_current_registry() -> None:
+    """With the current registry the overlay demonstrably lifts the chokepoint
+    component (elevated-but-not-yet-critical passages get their forward path
+    priced) — proof the seam is live, not inert."""
+    base = compute_shipping_stress({}, {}, [], [])
+    esc = compute_shipping_stress({}, {}, [], [], escalation_horizon=3)
+    assert esc.component_scores["chokepoint"] > base.component_scores["chokepoint"]
+
+
+def test_escalation_overlay_marker_is_modeled_and_stamped() -> None:
+    esc = compute_shipping_stress({}, {}, [], [], escalation_horizon=2)
+    ov = esc.escalation_overlay
+    assert ov.get("enabled") is True
+    assert ov.get("horizon") == 2
+    assert ov.get("provenance") == "modeled"
+    assert ov.get("note")                         # human-readable provenance note
+
+
+def test_escalation_overlay_reconciles_with_overlay_weights() -> None:
+    """Even with the overlay on, the prominence-weighted component decomposition
+    still reconciles to the overall SSI (the weight identity is preserved)."""
+    esc = compute_shipping_stress({}, {}, [], [], escalation_horizon=3)
+    recon = sum(COMPONENT_WEIGHTS[k] * esc.component_scores.get(k, 0.0)
+                for k in COMPONENT_WEIGHTS)
+    assert recon == pytest.approx(esc.overall_ssi, abs=1e-3)
