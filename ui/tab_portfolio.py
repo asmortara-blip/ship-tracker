@@ -772,6 +772,148 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
         logger.warning(f"risk metrics error: {e}")
 
 
+def _render_persisted_book_risk(stock_data=None) -> None:
+    """Live-book VaR/ES + per-scenario stress on the PERSISTED book (R125).
+
+    The OMS-risk-desk view: load the current user's DURABLE book from
+    ``state.positions`` (NOT the volatile session list, and NOT a hardcoded
+    equal-weight universe like the Risk Lab tab), then run
+    ``risk_lab.portfolio_var`` over its REAL marked weights × the REAL returns
+    panel, plus ``stress_test_all_scenarios(weights)`` — every BUILTIN scenario's
+    impact on the live book.
+
+    Distinct from ``_render_risk_metrics`` (R008): that overlays the SESSION
+    book; this is the PERSISTED ledger and adds the scenario-stress table the
+    Portfolio tab never had. Honest empty-state for a session-less / empty book
+    or dark prices — no rng.normal.
+    """
+    try:
+        from processing.persisted_book_risk import (
+            load_persisted_positions,
+            persisted_book_risk,
+        )
+        from state.user_scope import current_user_id
+
+        uid = current_user_id()
+        positions = load_persisted_positions(uid)
+
+        section_header(
+            "Persisted-Book Risk",
+            "Your DURABLE saved book (state.positions) driving live VaR and a "
+            "per-scenario stress test — the view a risk desk runs each morning. "
+            "Distinct from the session-book risk strip above.",
+        )
+
+        if not positions:
+            st.info(
+                "No persisted book yet — sign in and save positions (the Add/Edit "
+                "form above persists to your durable ledger). The session demo "
+                "book is shown in the risk strip above, but is not stressed here."
+            )
+            return
+
+        risk = persisted_book_risk(positions, stock_data or {})
+
+        # ── Headline cards: book VaR/CVaR (sized by priced MV) + worst scenario.
+        var = risk.var
+        if var is not None and var.n_observations > 0:
+            var_pct = abs(var.var_pct) * 100
+            cvar_pct = abs(var.cvar_pct) * 100
+            var_val = f"{_fmt_dollar_abs(var.var_dollar)}" if risk.market_value > 0 \
+                else f"{var_pct:.2f}%"
+            var_sub = (f"{var_pct:.2f}% of book · {var.n_observations}d panel"
+                       if risk.market_value > 0
+                       else f"{var.n_observations}d real panel · book unpriced")
+            cvar_val = f"{_fmt_dollar_abs(var.cvar_dollar)}" if risk.market_value > 0 \
+                else f"{cvar_pct:.2f}%"
+        else:
+            var_val, var_sub, cvar_val = "n/a", "real returns panel unavailable", "n/a"
+
+        worst = risk.scenarios[0] if risk.scenarios else None
+        worst_val = f"{worst.pnl_pct*100:+.2f}%" if worst else "n/a"
+        worst_sub = (f"{worst.scenario_name}" if worst else "no scenarios loaded")
+        worst_color = (C_LOW if worst and worst.pnl_pct < 0
+                       else (C_HIGH if worst and worst.pnl_pct > 0 else C_TEXT3))
+
+        metric_card_row([
+            {"label": "Book VaR (95%, 1-Day)", "value": var_val,
+             "accent": C_LOW, "sublabel": var_sub},
+            {"label": "Book CVaR (95%)", "value": cvar_val,
+             "accent": C_LOW, "sublabel": "expected tail loss"},
+            {"label": "Priced Book Value", "value": _fmt_dollar_abs(risk.market_value),
+             "accent": C_TEXT, "sublabel": f"{risk.n_priced} of {risk.n_positions} lots priced"},
+            {"label": "Worst Scenario", "value": worst_val,
+             "accent": worst_color, "sublabel": worst_sub},
+        ], columns=4)
+
+        # ── Per-scenario stress table on the live book (worst-loss-first). ────
+        if risk.scenarios:
+            headers = ["Scenario", "Category", "P&L %", "P&L $",
+                       "Book After", "Top Contributor"]
+            rows: list[list[str]] = []
+            for r in risk.scenarios:
+                if r.per_ticker_pnl:
+                    top_ticker, top_pnl = max(
+                        r.per_ticker_pnl.items(), key=lambda kv: abs(kv[1]))
+                    top_str = f"{top_ticker} ({_fmt_dollar(top_pnl)})"
+                else:
+                    top_str = "—"
+                pnl_color = (C_HIGH if r.pnl_pct > 0
+                             else (C_LOW if r.pnl_pct < 0 else C_TEXT2))
+                cat_color = {
+                    "Geopolitical": C_LOW, "Weather": C_MOD, "Macro": C_ACCENT,
+                    "Demand": "#7c6eaf", "Operational": C_TEXT2,
+                }.get(r.category, C_TEXT2)
+                rows.append([
+                    _sans(r.scenario_name, color=C_TEXT, weight=600),
+                    badge(r.category, color=cat_color),
+                    _mono(f"{r.pnl_pct*100:+.2f}%", color=pnl_color),
+                    _mono(_fmt_dollar(r.pnl_dollar), color=pnl_color),
+                    _mono(_fmt_dollar_abs(r.portfolio_value_after), color=C_TEXT2),
+                    _sans(top_str, color=C_TEXT2),
+                ])
+            wsj_market_table(headers, rows)
+
+            # Horizontal P&L bar — worst losses at the top.
+            fig = go.Figure(go.Bar(
+                x=[r.pnl_pct * 100 for r in risk.scenarios],
+                y=[r.scenario_name for r in risk.scenarios],
+                orientation="h",
+                marker_color=[C_LOW if r.pnl_pct < 0 else C_HIGH
+                              for r in risk.scenarios],
+                text=[f"{r.pnl_pct*100:+.1f}%" for r in risk.scenarios],
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>Book P&L: %{x:+.2f}%<extra></extra>",
+            ))
+            apply_dark_layout(
+                fig, title="Scenario P&L on the persisted book (% of book)",
+                height=max(260, 28 * len(risk.scenarios) + 80),
+                showlegend=False,
+            )
+            fig.update_layout(
+                xaxis={"ticksuffix": "%"},
+                yaxis={"autorange": "reversed"},
+                margin={"l": 12, "r": 80, "t": 46, "b": 30},
+            )
+            st.plotly_chart(fig, use_container_width=True, key="persisted_book_stress")
+
+        weight_note = ("real marked weights" if risk.weights_are_real
+                       else "equal-weight fallback (prices dark)")
+        panel_note = (f"VaR on {risk.panel_obs}d real returns panel"
+                      if risk.panel_is_real
+                      else "VaR n/a — no real returns panel")
+        st.markdown(source_footer([
+            DataSource.live(
+                f"Persisted book ({weight_note}); {panel_note}; "
+                "scenario catalog from state/scenarios.py")
+            if (risk.panel_is_real or risk.weights_are_real) else
+            DataSource.demo(
+                "Persisted book — prices dark; scenario shocks real, VaR unavailable")
+        ]), unsafe_allow_html=True)
+    except Exception as exc:
+        logger.warning(f"persisted-book risk error: {exc}")
+
+
 def _render_book_cascade(positions, stock_data, macro_data, insights) -> None:
     """Overlay the book onto the disruption cascade (R008) — the research-to-PM
     bridge that the Portfolio tab never had.
@@ -1633,6 +1775,12 @@ def render(stock_data, macro_data, insights) -> None:
             section_divider("Risk")
 
             _render_risk_metrics(df, stock_data, macro_data)
+
+            # R125 — live-book VaR + per-scenario stress on the PERSISTED book
+            # (state.positions), the OMS-risk-desk view. Distinct from the
+            # session-book risk strip above.
+            _render_persisted_book_risk(stock_data)
+
             _render_book_cascade(positions, stock_data, macro_data, insights)
 
             # Per-position risk-return scatter — complements the aggregate
