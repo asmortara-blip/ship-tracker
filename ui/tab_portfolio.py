@@ -711,9 +711,11 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
         if returns_df.empty:
             return
 
-        hist = risk_lab.portfolio_var(
+        # EWMA — the platform's live VaR method (vol-adaptive, coverage-tested),
+        # consistent with sized_book_var / persisted_book_risk / the Risk-Lab tab.
+        book_var = risk_lab.portfolio_var(
             returns_df, w, confidence=0.95,
-            portfolio_value=book_mv, method="historical")
+            portfolio_value=book_mv, method="ewma")
 
         # Weighted book-return series for Sharpe / MaxDD / BDI correlation.
         cols = [t for t in returns_df.columns if t in w]
@@ -746,7 +748,7 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
         except Exception:
             pass
 
-        var_pct = abs(hist.var_pct) * 100
+        var_pct = abs(book_var.var_pct) * 100
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
         dd_color = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
         window = len(returns_df)
@@ -754,7 +756,7 @@ def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> 
                else f"synthetic panel — prices dark, {window}d")
         section_header("Risk Metrics", f"VaR, Sharpe, drawdown, BDI correlation — {sub}")
         metric_card_row([
-            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(hist.var_dollar),
+            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(book_var.var_dollar),
              "accent": C_LOW,        "sublabel": f"{var_pct:.2f}% of book"},
             {"label": "Sharpe Ratio",    "value": f"{sharpe:.2f}",
              "accent": sharpe_color,  "sublabel": "Annualised, rf=4.5%"},
