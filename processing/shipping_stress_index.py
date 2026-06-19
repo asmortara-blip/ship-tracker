@@ -660,6 +660,7 @@ def compute_shipping_stress(
     route_results: list,
     voyage_fleet=None,
     canal_stats=None,
+    chokepoint_transits=None,
     escalation_horizon: int | None = None,
 ) -> ShippingStressReport:
     """Compute the fleet-wide Shipping Stress Index.
@@ -707,6 +708,17 @@ def compute_shipping_stress(
             canal_realness = apply_live_canal_state(canal_stats)
         except Exception:
             logger.exception("compute_shipping_stress: canal overlay failed")
+
+    # Real PortWatch transit-collapse overlay on the NON-canal straits (additive,
+    # escalate-only, never-downgrade). Default (None) is a no-op, so callers that
+    # don't supply the feed — and the whole test suite — keep the baseline.
+    transit_realness: dict = {}
+    if chokepoint_transits is not None:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+            transit_realness = apply_live_chokepoint_transits(chokepoint_transits)
+        except Exception:
+            logger.exception("compute_shipping_stress: chokepoint transit overlay failed")
 
     delayed_by_route = _delayed_counts_by_route(voyage_fleet)
 

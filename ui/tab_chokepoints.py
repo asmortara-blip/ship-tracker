@@ -925,6 +925,17 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
         except Exception as _exc:
             logger.debug(f"canal->chokepoint UI overlay skipped: {_exc}")
 
+        # S1 per-session UI overlay: escalate the NON-canal straits from the REAL
+        # IMF PortWatch transit feed (mirrors worker.run_portwatch_transit_job).
+        # Offline-safe + escalate-only: an unavailable/empty feed is a no-op so
+        # the baseline stands; Suez/Panama stay owned by the canal overlay above.
+        try:
+            from data.portwatch_feed import fetch_chokepoint_transits
+            from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+            apply_live_chokepoint_transits(fetch_chokepoint_transits())
+        except Exception as _exc:
+            logger.debug(f"portwatch->chokepoint UI overlay skipped: {_exc}")
+
         try:
             page_header(
                 title="Strategic Waterway & Chokepoint Intelligence",

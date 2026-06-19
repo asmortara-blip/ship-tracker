@@ -76,7 +76,8 @@ def _live_feeds_offline_by_default(monkeypatch, tmp_path):
             raise ConnectionError("live feed network disabled in tests")
 
     for mod_name, cache_sub in (("data.sanctions_feed", "sanctions_cache"),
-                                ("data.marine_weather_feed", "marine_cache")):
+                                ("data.marine_weather_feed", "marine_cache"),
+                                ("data.portwatch_feed", "portwatch_cache")):
         try:
             mod = __import__(mod_name, fromlist=["_CACHE_DIR"])
             monkeypatch.setattr(mod, "requests", _NoNet, raising=False)

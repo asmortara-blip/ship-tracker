@@ -914,6 +914,35 @@ def run_gdelt_chokepoint_job(*, http_get=None) -> dict:
         return {"ok": False, "realness": "unavailable", "n_events": 0, "live": []}
 
 
+def run_portwatch_transit_job() -> dict:
+    """Escalate the NON-canal straits' risk_level from the REAL IMF PortWatch
+    transit feed (S1), so SSI computed this pass reads live strait risk instead
+    of only the hardcoded baseline. Mirrors run_gdelt_chokepoint_job's contract.
+
+    Escalate-only + real-only: a transit COLLAPSE raises a strait above its
+    baseline; an unavailable/empty feed leaves the baseline untouched (silence is
+    never a signal), and the escalation merges against the PRISTINE baseline so a
+    cleared collapse returns the node to baseline. Suez/Panama are owned by the
+    canal overlay and skipped. Never raises.
+    """
+    try:
+        from data.portwatch_feed import fetch_chokepoint_transits
+        from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+
+        transits = fetch_chokepoint_transits()
+        marker = apply_live_chokepoint_transits(transits)
+        live = sorted(marker.keys())
+        logger.info(
+            f"run_portwatch_transit_job: feed={transits.basis}, "
+            f"{len(transits.rows)} row(s), {len(live)} strait(s) observed "
+            f"({', '.join(live) or 'none — baseline kept'})"
+        )
+        return {"ok": True, "basis": transits.basis, "live": live}
+    except Exception as exc:
+        logger.warning(f"run_portwatch_transit_job: failed: {exc}")
+        return {"ok": False, "basis": "unavailable", "live": []}
+
+
 @_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
@@ -2328,6 +2357,10 @@ def main(argv: Optional[list] = None) -> int:
         # 6h-cached so this is cheap most passes). Applied BEFORE the briefing
         # computes SSI, alongside the canal overlay. Shielded — never blocks.
         _run_always("gdelt→chokepoint risk", lambda: run_gdelt_chokepoint_job())
+        # S1: escalate the non-canal straits from real PortWatch transit collapses
+        # too (real-only, escalate-only, 6h-cached). Applied alongside the canal +
+        # gdelt overlays BEFORE the briefing computes SSI. Shielded — never blocks.
+        _run_always("portwatch→chokepoint transit", lambda: run_portwatch_transit_job())
         result = run_daily_briefing_job(bundle, push_to_channels=args.push)
         # R011: advance the daily cadence stamp ONLY when the briefing actually
         # succeeded. A failed build leaves the stamp un-advanced so the next

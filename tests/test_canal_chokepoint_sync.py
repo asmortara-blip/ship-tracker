@@ -127,3 +127,106 @@ def test_run_canal_sync_job_overlays_real_only(monkeypatch, restore_chokepoints)
     assert realness["suez"]["realness"] == "live"
     assert realness["panama"]["realness"] == "modeled"
     assert CHOKEPOINTS["suez"].current_risk_level == "CRITICAL"
+
+
+# ── PortWatch transit overlay (non-canal straits, escalate-only, ratchet-free) ─
+
+from data.portwatch_feed import ChokepointTransit, PortWatchTransits  # noqa: E402
+from data.quality import DataSource  # noqa: E402
+from processing.canal_chokepoint_sync import (  # noqa: E402
+    apply_live_chokepoint_transits,
+    _BASELINE_RISK,
+)
+
+
+def _transits(feed_id: str, name: str, *, collapse: bool = False,
+              drop_frac: float = 0.9) -> list:
+    """PortWatch-style rows for one chokepoint: 90 baseline days at 100 transits
+    then 7 recent days that hold steady or collapse by ``drop_frac``."""
+    rows = [ChokepointTransit(feed_id, name,
+                              f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}", 100.0, 1.0)
+            for i in range(90)]
+    recent = 100.0 * (1.0 - drop_frac) if collapse else 100.0
+    rows += [ChokepointTransit(feed_id, name, f"2026-05-{i + 1:02d}", recent, 1.0)
+             for i in range(7)]
+    return rows
+
+
+def _reg_copy() -> dict:
+    return {k: dataclasses.replace(v) for k, v in CHOKEPOINTS.items()}
+
+
+@pytest.fixture
+def restore_all_chokepoints():
+    snap = {k: dataclasses.replace(v) for k, v in CHOKEPOINTS.items()}
+    yield
+    for k, v in snap.items():
+        CHOKEPOINTS[k] = v
+
+
+def test_transit_collapse_escalates_a_strait():
+    reg = _reg_copy()
+    marker = apply_live_chokepoint_transits(
+        _transits("cpX", "Malacca Strait", collapse=True, drop_frac=0.9), registry=reg)
+    assert reg["malacca"].current_risk_level == "CRITICAL"   # LOW baseline → escalated
+    assert marker["malacca"]["realness"] == "live"
+    assert marker["malacca"]["transit_drop"] > 0.5
+
+
+def test_moderate_drop_maps_to_moderate():
+    reg = _reg_copy()
+    apply_live_chokepoint_transits(
+        _transits("cpX", "Malacca Strait", collapse=True, drop_frac=0.25), registry=reg)
+    assert reg["malacca"].current_risk_level == "MODERATE"   # LOW + ~0.24 drop
+
+
+def test_normal_flow_never_downgrades_baseline():
+    reg = _reg_copy()
+    # hormuz baseline is HIGH; normal transit flow must NOT lower it.
+    apply_live_chokepoint_transits(
+        _transits("cpH", "Strait of Hormuz", collapse=False), registry=reg)
+    assert reg["hormuz"].current_risk_level == _BASELINE_RISK["hormuz"]
+
+
+def test_escalation_is_ratchet_free():
+    reg = _reg_copy()
+    apply_live_chokepoint_transits(
+        _transits("cpX", "Malacca Strait", collapse=True, drop_frac=0.9), registry=reg)
+    assert reg["malacca"].current_risk_level == "CRITICAL"
+    # Collapse clears → merges against PRISTINE baseline, returns to LOW (no ratchet).
+    apply_live_chokepoint_transits(
+        _transits("cpX", "Malacca Strait", collapse=False), registry=reg)
+    assert reg["malacca"].current_risk_level == _BASELINE_RISK["malacca"]
+
+
+def test_suez_and_panama_are_not_touched_by_transit_overlay():
+    reg = _reg_copy()
+    before = (reg["suez"].current_risk_level, reg["panama"].current_risk_level)
+    marker = apply_live_chokepoint_transits(
+        _transits("cp1", "Suez Canal", collapse=True, drop_frac=0.9)
+        + _transits("cp2", "Panama Canal", collapse=True, drop_frac=0.9), registry=reg)
+    assert (reg["suez"].current_risk_level, reg["panama"].current_risk_level) == before
+    assert "suez" not in marker and "panama" not in marker
+
+
+def test_unavailable_feed_is_noop():
+    reg = _reg_copy()
+    unavailable = PortWatchTransits(rows=[], basis="unavailable", latest_date="",
+                                    source=DataSource.modeled("x"))
+    assert apply_live_chokepoint_transits(unavailable, registry=reg) == {}
+    assert reg["malacca"].current_risk_level == _BASELINE_RISK["malacca"]
+
+
+def test_compute_shipping_stress_transits_noop_by_default(restore_all_chokepoints):
+    from processing.shipping_stress_index import compute_shipping_stress
+    before = CHOKEPOINTS["malacca"].current_risk_level
+    compute_shipping_stress({}, {}, [], [])                 # no param → no-op
+    assert CHOKEPOINTS["malacca"].current_risk_level == before
+
+
+def test_compute_shipping_stress_applies_real_transits(restore_all_chokepoints):
+    from processing.shipping_stress_index import compute_shipping_stress
+    compute_shipping_stress(
+        {}, {}, [], [],
+        chokepoint_transits=_transits("cpX", "Malacca Strait", collapse=True, drop_frac=0.9))
+    assert CHOKEPOINTS["malacca"].current_risk_level == "CRITICAL"
