@@ -182,6 +182,63 @@ def test_independence_degenerate_inputs_safe() -> None:
         assert out["rejected"] is False
 
 
+# ── EWMA vol-adaptive VaR method (RiskMetrics) ───────────────────────────────
+
+def test_ewma_sigma_is_causal_and_responds_to_vol_spike() -> None:
+    from processing.var_coverage_backtest import _ewma_sigma, _EWMA_LAMBDA
+    r = np.array([0.001] * 120 + [0.08] * 20)
+    sig = _ewma_sigma(r, _EWMA_LAMBDA, 60)
+    assert np.all(np.isfinite(sig)) and np.all(sig >= 0.0)
+    # Causal: sigma[t] uses only returns BEFORE t, so the spike at index 120 has
+    # not yet moved sigma[120] (still near the calm level)...
+    assert sig[120] == pytest.approx(sig[119], rel=0.5)
+    # ...and the vol estimate climbs as the spike is absorbed.
+    assert sig[120] < sig[139]
+
+
+def test_ewma_method_runs_real_basis() -> None:
+    from processing.var_coverage_backtest import backtest_var_coverage
+    sc = backtest_var_coverage(_normal_panel(["A", "B", "C"], n=700, seed=3),
+                               confidence=0.95, window=100, method="ewma")
+    assert sc.basis == "real" and sc.method == "ewma" and sc.n_observations >= 30
+
+
+def test_ewma_adapts_to_vol_regime_better_than_historical() -> None:
+    # Deterministic calm->turbulent vol-regime shift. A flat trailing-window
+    # historical VaR lags the regime change (its breach rate drifts off nominal);
+    # the EWMA band adapts and lands the breach rate closer to nominal. This is
+    # the defining property that motivated adding the method (confirmed on real
+    # 2021-2026 shipping data: EWMA calibrated where historical was rejected).
+    rng = np.random.default_rng(7)
+    r = np.concatenate([rng.normal(0.0, 0.01, 500), rng.normal(0.0, 0.05, 500)])
+    idx = pd.date_range("2020-01-01", periods=len(r), freq="B")
+    panel = pd.DataFrame({"A": r}, index=idx)
+    from processing.var_coverage_backtest import backtest_var_coverage
+    hist = backtest_var_coverage(panel, confidence=0.95, window=100,
+                                 method="historical")
+    ewma = backtest_var_coverage(panel, confidence=0.95, window=100,
+                                 method="ewma")
+    assert hist.basis == "real" and ewma.basis == "real"
+    assert abs(ewma.breach_rate - ewma.nominal_rate) <= abs(
+        hist.breach_rate - hist.nominal_rate)
+
+
+def test_loader_prefers_longest_history(tmp_path) -> None:
+    # Two cache files for the same symbol -> the LONGEST history wins,
+    # deterministically (so a deepened cache never loses to a stale short file).
+    from processing.var_coverage_backtest import _load_cached_stock_data
+    sdir = tmp_path / "stocks"
+    sdir.mkdir(parents=True)
+    short = pd.DataFrame({"symbol": ["ZIM"] * 5, "close": range(5),
+                          "date": pd.date_range("2026-01-01", periods=5)})
+    long = pd.DataFrame({"symbol": ["ZIM"] * 500, "close": range(500),
+                         "date": pd.date_range("2021-01-01", periods=500)})
+    short.to_parquet(sdir / "zim_90d.parquet")
+    long.to_parquet(sdir / "zim_1825d.parquet")
+    out = _load_cached_stock_data(str(tmp_path))
+    assert len(out["ZIM"]) == 500
+
+
 def test_backtest_populates_conditional_coverage_fields() -> None:
     # On a real-basis panel the new fields are populated & self-consistent:
     # when independence is assessable, LR_cc == kupiec_lr + LR_ind exactly and

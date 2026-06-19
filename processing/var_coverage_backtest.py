@@ -44,6 +44,8 @@ _DEFAULT_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
 _CHI2_1DOF_95 = 3.841458820694124
 # chi-square(2) critical value at 95% — joint conditional-coverage rejects above.
 _CHI2_2DOF_95 = 5.991464547107979
+# RiskMetrics daily EWMA decay for the vol-adaptive ("ewma") VaR method.
+_EWMA_LAMBDA = 0.94
 
 
 @dataclass
@@ -167,6 +169,29 @@ def christoffersen_independence(hit_sequence) -> dict:
             "rejected": lr > _CHI2_1DOF_95, "assessable": True, "note": ""}
 
 
+def _ewma_sigma(r: np.ndarray, lam: float, seed_window: int) -> np.ndarray:
+    """Causal RiskMetrics EWMA volatility — ``sigma[t]`` uses only returns BEFORE
+    ``t`` (no look-ahead).
+
+    ``sigma^2_t = lam * sigma^2_{t-1} + (1-lam) * r_{t-1}^2``, seeded with the
+    sample variance of the first ``seed_window`` returns. Returns a per-``t``
+    sigma array aligned to ``r`` (the vol forecast for day ``t`` from info < t).
+    The short (~1/(1-lam)) memory widens the band as volatility builds, so VaR
+    breaches do not bunch in stress regimes — the failure mode a flat trailing
+    window leaves unaddressed.
+    """
+    n = len(r)
+    sig = np.empty(n)
+    if n == 0:
+        return sig
+    seed = float(np.var(r[:max(2, min(seed_window, n))]))
+    prev = seed if seed > 0.0 else (float(np.var(r)) or 1e-8)
+    for t in range(n):
+        sig[t] = math.sqrt(prev) if prev > 0.0 else 0.0
+        prev = lam * prev + (1.0 - lam) * float(r[t]) * float(r[t])
+    return sig
+
+
 def _rolling_var_breaches(
     port_returns: pd.Series, *, confidence: float, window: int, method: str,
 ) -> tuple:
@@ -184,12 +209,14 @@ def _rolling_var_breaches(
         return 0, 0, []
     q = (1.0 - confidence) * 100.0
     z = None
-    if method == "parametric":
+    if method in ("parametric", "ewma"):
         try:
             from scipy.stats import norm
             z = float(norm.ppf(1.0 - confidence))
         except Exception:
             z = -1.6448536269514722 if confidence >= 0.95 else -1.2815515594
+    # Causal EWMA vol forecast (RiskMetrics) for the vol-adaptive method.
+    ewma = _ewma_sigma(r, _EWMA_LAMBDA, window) if method == "ewma" else None
 
     obs = breaches = 0
     hits: list = []
@@ -197,6 +224,9 @@ def _rolling_var_breaches(
         win = r[t - window:t]
         if method == "parametric" and z is not None:
             var_t = float(win.mean() + z * win.std(ddof=1))
+        elif method == "ewma" and z is not None:
+            # Zero-mean RiskMetrics band scaled by the day's EWMA vol forecast.
+            var_t = float(z * ewma[t])
         else:
             var_t = float(np.percentile(win, q))
         obs += 1
@@ -326,6 +356,11 @@ def _load_cached_stock_data(cache_dir: str = "cache") -> dict:
     backtest can run headless. Frames keep their canonical date-as-column shape;
     ``book_pnl.returns_panel`` now indexes them correctly. Returns {} when the
     cache is empty/absent.
+
+    When several cache files exist for the same symbol (e.g. a shallow
+    ``zim_90d`` alongside a deepened ``zim_1825d``) the LONGEST history wins —
+    deterministically, regardless of filename ordering — so deepening the cache
+    always takes effect and never silently loses to a stale short file.
     """
     out: dict = {}
     try:
@@ -341,7 +376,8 @@ def _load_cached_stock_data(cache_dir: str = "cache") -> dict:
                 continue
             sym = (str(df["symbol"].iloc[0]) if "symbol" in df.columns
                    else f.stem.split("_")[0].upper())
-            out[sym] = df
+            if sym not in out or len(df) > len(out[sym]):
+                out[sym] = df
     except Exception:
         return {}
     return out
