@@ -51,6 +51,28 @@ from routes.route_registry import ROUTES, ROUTES_BY_ID
 # ---------------------------------------------------------------------------
 # Component weights — the SSI blend. Asserted to sum to 1.0 at import time.
 # ---------------------------------------------------------------------------
+#
+# These are deliberately HAND-SET and diversified. They are NOT auto-fit to the
+# ``ssi_component_validation`` backtest, and that is intentional.
+#
+# What the validator does confirm (checked across 60 seeds, 2026-06-17): chokepoint
+# is the single strongest component in EVERY seed, and the weak end is the
+# {anomaly, vulnerability, weather} cluster. So giving chokepoint the top weight and
+# that cluster the bottom weights is directionally right. What it does NOT confirm is
+# the exact ordering: the full sign-agreement ranking equals this weight ordering in
+# only ~2/60 seeds, because the middle reshuffles seed-to-seed (the synthetic truth
+# ranks rate above weather and vulnerability above anomaly — the reverse of the tail
+# here). Do not read these weights as a fitted skill ranking; only the chokepoint=top,
+# diversified-tail shape is load-bearing.
+#
+# Why not fit to it anyway: the validator runs on a SYNTHETIC, seeded history with
+# *planted* component→move relationships (see ``synthesize_component_history``), so a
+# "skill-proportional" reweighting would be fitting fixture artifacts, not real
+# predictiveness. The implied magnitudes are wildly seed-dependent (chokepoint's
+# edge-share swings ~0.34–0.66 across seeds) and would over-concentrate the index on
+# one component while zeroing a genuinely-weighted component off a single seed's noise.
+# A real data-driven reweighting requires a REAL per-component predictiveness feed (a
+# roadmap item); until then these published, diversified weights stand.
 
 COMPONENT_WEIGHTS: dict[str, float] = {
     "chokepoint":    0.29,
