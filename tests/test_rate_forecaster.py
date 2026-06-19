@@ -384,6 +384,32 @@ def test_train_forecast_model_horizon_30_returns_gbr() -> None:
     assert pred.shape == (1,)
 
 
+def test_oos_r2_reports_no_fake_skill_on_noise() -> None:
+    # Overlapping rolling-window features + a target INDEPENDENT of them. The
+    # leak-free walk-forward CV (scaler-in-fold + embargo) must not fabricate
+    # skill — the exact inflation the old full-scaler/plain-KFold path produced.
+    import numpy as np
+    rng = np.random.default_rng(0)
+    raw = rng.normal(0.0, 1.0, 260)
+    X = pd.DataFrame({f"lag{k}": raw[k:k + 200] for k in range(5)})  # overlapping
+    y = pd.Series(rng.normal(0.0, 1.0, 200))                        # independent
+    _, _, r2 = _train_forecast_model(X, y, horizon=30)
+    assert -1.0 <= r2 <= 0.10
+
+
+def test_oos_r2_recovers_genuine_signal() -> None:
+    # A clean, learnable, stationary relationship → the leak-free CV still
+    # reports real skill (the fix removes inflation, not legitimate signal).
+    import numpy as np
+    rng = np.random.default_rng(1)
+    n = 400
+    x = rng.normal(0.0, 1.0, n)
+    X = pd.DataFrame({"f": x})
+    y = pd.Series(2.0 * x + rng.normal(0.0, 0.05, n))
+    _, _, r2 = _train_forecast_model(X, y, horizon=7)   # Ridge, embargo=7
+    assert r2 > 0.5
+
+
 # ─── _gbr_confidence_interval ──────────────────────────────────────────────
 
 def test_gbr_confidence_interval_returns_lo_le_hi() -> None:
