@@ -39,8 +39,11 @@ import pandas as pd
 # Default shipping universe to coverage-test (matches the Risk-Lab book).
 _DEFAULT_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
 
-# chi-square(1) critical value at 95% — Kupiec rejects above this.
+# chi-square(1) critical value at 95% — Kupiec / Christoffersen-independence
+# reject above this.
 _CHI2_1DOF_95 = 3.841458820694124
+# chi-square(2) critical value at 95% — joint conditional-coverage rejects above.
+_CHI2_2DOF_95 = 5.991464547107979
 
 
 @dataclass
@@ -61,6 +64,18 @@ class VaRCoverageScorecard:
     basis: str                   # "real" | "insufficient"
     summary: str = ""
     tickers: list = field(default_factory=list)
+
+    # Christoffersen (1998) conditional-coverage battery. Kupiec checks the
+    # breach COUNT; these check breach TIMING. A VaR that breaches the right
+    # number of times but BUNCHES them in one stress window passes Kupiec yet
+    # is dangerous — the regime-driven shipping-disruption failure mode Kupiec
+    # is mathematically blind to. None when not assessable (never NaN).
+    lr_independence: Optional[float] = None          # Christoffersen LR_ind
+    pvalue_independence: Optional[float] = None
+    independence_assessable: bool = False            # False when no breach-after-breach
+    breaches_clustered: bool = False                 # LR_ind rejects independence at 95%
+    lr_conditional_coverage: Optional[float] = None  # LR_cc = LR_uc + LR_ind ~ chi2(2)
+    pvalue_conditional_coverage: Optional[float] = None
 
 
 def kupiec_pof(n_observations: int, n_breaches: int, nominal_rate: float) -> dict:
@@ -93,19 +108,80 @@ def kupiec_pof(n_observations: int, n_breaches: int, nominal_rate: float) -> dic
     return {"lr": lr, "pvalue": float(pvalue), "rejected": lr > _CHI2_1DOF_95}
 
 
+def christoffersen_independence(hit_sequence) -> dict:
+    """Christoffersen (1998) independence likelihood-ratio test on a 0/1 VaR
+    breach sequence.
+
+    Kupiec checks the breach COUNT; this checks whether breaches CLUSTER — i.e.
+    whether a breach today raises the odds of a breach tomorrow. It fits a
+    first-order Markov chain to the hit sequence and tests
+    ``H0: P(breach | prior breach) == P(breach | prior no-breach)`` against the
+    unconstrained two-state model. ``LR_ind ~ chi-square(1)``; a large value
+    rejects independence (breaches bunch — the regime-driven failure mode Kupiec
+    cannot see).
+
+    Returns ``{"lr", "pvalue", "rejected", "assessable", "note"}``. The test is
+    only assessable once at least one breach is FOLLOWED by another breach
+    (``n11 >= 1``); with no consecutive breaches there is no information about
+    breach persistence, so it returns ``assessable=False`` (lr/pvalue=None, never
+    NaN) rather than a vacuous "independent" verdict. The 0·log(0) corners are
+    taken at their analytic limit of 0.
+    """
+    h = [1 if int(x) else 0 for x in (hit_sequence or [])]
+    if len(h) < 2:
+        return {"lr": None, "pvalue": None, "rejected": False,
+                "assessable": False, "note": "too few observations"}
+    n00 = n01 = n10 = n11 = 0
+    for prev, cur in zip(h[:-1], h[1:]):
+        if prev == 0:
+            if cur == 0:
+                n00 += 1
+            else:
+                n01 += 1
+        else:
+            if cur == 0:
+                n10 += 1
+            else:
+                n11 += 1
+    # Need at least one breach-after-breach to estimate breach persistence, and
+    # a non-breach prior state for the contrast. n11==0 is common at small N
+    # (e.g. 1 breach in 29 days) — report 'not assessable', never a fake verdict.
+    if n11 == 0 or (n00 + n01) == 0 or (n10 + n11) == 0:
+        return {"lr": None, "pvalue": None, "rejected": False,
+                "assessable": False,
+                "note": "no consecutive breaches — independence not assessable"}
+
+    pi01 = n01 / (n00 + n01)
+    pi11 = n11 / (n10 + n11)
+    pi = (n01 + n11) / (n00 + n01 + n10 + n11)
+
+    def _xlog(count: int, prob: float) -> float:
+        return count * math.log(prob) if (count > 0 and prob > 0.0) else 0.0
+
+    ll_un = (_xlog(n00, 1.0 - pi01) + _xlog(n01, pi01)
+             + _xlog(n10, 1.0 - pi11) + _xlog(n11, pi11))
+    ll_r = _xlog(n00 + n10, 1.0 - pi) + _xlog(n01 + n11, pi)
+    lr = max(0.0, -2.0 * (ll_r - ll_un))
+    pvalue = math.erfc(math.sqrt(lr / 2.0)) if lr > 0 else 1.0
+    return {"lr": float(lr), "pvalue": float(pvalue),
+            "rejected": lr > _CHI2_1DOF_95, "assessable": True, "note": ""}
+
+
 def _rolling_var_breaches(
     port_returns: pd.Series, *, confidence: float, window: int, method: str,
 ) -> tuple:
     """Roll a 1-day VaR over a trailing window; count realized breaches.
 
-    Returns ``(n_observations, n_breaches)`` over the out-of-sample span
-    (every day after the first full window). A breach is a realized return
-    strictly below that day's VaR estimate (VaR is a negative return).
+    Returns ``(n_observations, n_breaches, hit_sequence)`` over the out-of-sample
+    span (every day after the first full window). A breach is a realized return
+    strictly below that day's VaR estimate (VaR is a negative return);
+    ``hit_sequence`` is the OOS-ordered 0/1 breach series the Christoffersen
+    timing tests run on.
     """
     r = pd.to_numeric(port_returns, errors="coerce").dropna().to_numpy()
     n = len(r)
     if n <= window + 1:
-        return 0, 0
+        return 0, 0, []
     q = (1.0 - confidence) * 100.0
     z = None
     if method == "parametric":
@@ -116,6 +192,7 @@ def _rolling_var_breaches(
             z = -1.6448536269514722 if confidence >= 0.95 else -1.2815515594
 
     obs = breaches = 0
+    hits: list = []
     for t in range(window, n):
         win = r[t - window:t]
         if method == "parametric" and z is not None:
@@ -123,9 +200,10 @@ def _rolling_var_breaches(
         else:
             var_t = float(np.percentile(win, q))
         obs += 1
-        if r[t] < var_t:
-            breaches += 1
-    return obs, breaches
+        breach = 1 if r[t] < var_t else 0
+        breaches += breach
+        hits.append(breach)
+    return obs, breaches, hits
 
 
 def backtest_var_coverage(
@@ -176,7 +254,7 @@ def backtest_var_coverage(
 
     sub = returns_panel[cols].dropna(how="any")
     port = pd.Series(sub.to_numpy() @ w, index=sub.index)
-    n_obs, n_breaches = _rolling_var_breaches(
+    n_obs, n_breaches, hits = _rolling_var_breaches(
         port, confidence=confidence, window=window, method=method
     )
     if n_obs < min_oos:
@@ -201,6 +279,24 @@ def backtest_var_coverage(
         "well-calibrated" if well else
         ("too conservative" if breach_rate < nominal else "too loose")
     )
+
+    # Christoffersen conditional-coverage battery on the realized breach timing.
+    ind = christoffersen_independence(hits)
+    lr_cc = pvalue_cc = None
+    clustered = False
+    if ind["assessable"]:
+        clustered = bool(ind["rejected"])
+        lr_cc = float(k["lr"] + ind["lr"])
+        # chi-square(2) survival function is exp(-x/2) in closed form.
+        pvalue_cc = float(math.exp(-lr_cc / 2.0))
+        cc_note = (
+            f" Christoffersen LR_ind={ind['lr']:.2f} (p={ind['pvalue']:.3f}) — "
+            f"breaches {'CLUSTER' if clustered else 'independent'}; "
+            f"conditional-coverage LR_cc={lr_cc:.2f} (p={pvalue_cc:.3f})."
+        )
+    else:
+        cc_note = f" Christoffersen independence: {ind['note']}."
+
     return VaRCoverageScorecard(
         confidence=confidence, method=method, window=window,
         n_observations=n_obs, n_breaches=n_breaches,
@@ -211,9 +307,15 @@ def backtest_var_coverage(
             f"{confidence*100:.0f}% VaR breached {n_breaches}/{n_obs} days "
             f"({breach_rate*100:.1f}% vs {nominal*100:.1f}% nominal) over "
             f"{len(cols)} names; Kupiec POF LR={k['lr']:.2f} "
-            f"(p={k['pvalue']:.3f}) — {verdict}."
+            f"(p={k['pvalue']:.3f}) — {verdict}." + cc_note
         ),
         tickers=cols,
+        lr_independence=ind["lr"],
+        pvalue_independence=ind["pvalue"],
+        independence_assessable=bool(ind["assessable"]),
+        breaches_clustered=clustered,
+        lr_conditional_coverage=lr_cc,
+        pvalue_conditional_coverage=pvalue_cc,
     )
 
 

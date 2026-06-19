@@ -648,14 +648,21 @@ def _run_var_coverage() -> BacktestResult:
             raw_fields={"basis": r.basis, "n_observations": r.n_observations},
         )
 
+    # Conditional coverage RAISES the bar: a VaR that passes the Kupiec count
+    # but CLUSTERS its breaches (Christoffersen-rejected) is not healthy.
+    healthy = bool(r.well_calibrated) and not bool(r.breaches_clustered)
+    cc_label = (
+        "clustered" if r.breaches_clustered else
+        ("independent" if r.independence_assessable else "timing n/a")
+    )
     return BacktestResult(
         name="VaR Coverage (Kupiec POF)",
         headline_label=f"{r.confidence*100:.0f}% VaR breach rate",
         headline_value=(
             f"{r.breach_rate*100:.1f}% vs {r.nominal_rate*100:.1f}% nominal "
-            f"({'calibrated' if r.well_calibrated else 'REJECTED'})"
+            f"({'calibrated' if healthy else 'REJECTED'}; breaches {cc_label})"
         ),
-        healthy=bool(r.well_calibrated),
+        healthy=healthy,
         summary=r.summary,
         raw_fields={
             "n_observations": r.n_observations,
@@ -665,6 +672,14 @@ def _run_var_coverage() -> BacktestResult:
             "kupiec_lr":      round(r.kupiec_lr, 4),
             "kupiec_pvalue":  round(r.kupiec_pvalue, 4),
             "rejected":       bool(r.rejected),
+            "lr_independence": (round(r.lr_independence, 4)
+                                if r.lr_independence is not None else None),
+            "pvalue_independence": (round(r.pvalue_independence, 4)
+                                    if r.pvalue_independence is not None else None),
+            "independence_assessable": bool(r.independence_assessable),
+            "breaches_clustered":      bool(r.breaches_clustered),
+            "lr_conditional_coverage": (round(r.lr_conditional_coverage, 4)
+                                        if r.lr_conditional_coverage is not None else None),
             "method":         r.method,
             "window":         r.window,
         },
