@@ -50,7 +50,7 @@ class VaRResult:
     """
     confidence: float
     horizon_days: int
-    method: str                  # "historical" | "parametric"
+    method: str                  # "historical" | "parametric" | "ewma"
     var_pct: float               # ≤ 0
     cvar_pct: float              # ≤ var_pct ≤ 0
     portfolio_value: float = 0.0
@@ -84,6 +84,10 @@ class MarketRegime:
 # ─────────────────────────────────────────────────────────────────────────────
 # VaR / CVaR
 # ─────────────────────────────────────────────────────────────────────────────
+
+# RiskMetrics daily EWMA decay for the vol-adaptive ("ewma") VaR method.
+EWMA_LAMBDA = 0.94
+
 
 def historical_var(
     returns: pd.Series,
@@ -175,6 +179,75 @@ def parametric_var(
     )
 
 
+def _ewma_vol(r: np.ndarray, lam: float) -> float:
+    """Latest RiskMetrics EWMA volatility forecast (causal — uses every return).
+
+    ``sigma^2 = lam*sigma^2 + (1-lam)*r^2`` iterated over the series; returns the
+    one-step-ahead forecast (the current vol regime), seeded with the sample
+    variance of the first (up to) 30 returns. The short ~1/(1-lam) memory makes
+    the band track regime shifts a flat sample sigma cannot.
+    """
+    n = len(r)
+    if n == 0:
+        return 0.0
+    seed = float(np.var(r[:min(30, n)]))
+    var = seed if seed > 0.0 else (float(np.var(r)) or 0.0)
+    for x in r:
+        var = lam * var + (1.0 - lam) * float(x) * float(x)
+    return math.sqrt(var) if var > 0.0 else 0.0
+
+
+def ewma_var(
+    returns: pd.Series,
+    *,
+    confidence: float = 0.95,
+    horizon_days: int = 1,
+    portfolio_value: float = 0.0,
+    lam: float = EWMA_LAMBDA,
+) -> VaRResult:
+    """RiskMetrics EWMA VaR: a zero-mean Gaussian band scaled by the EWMA
+    volatility forecast (responsive to the current vol regime).
+
+    Unlike the flat sample-sigma parametric VaR, the EWMA vol weights recent
+    returns more, so the band widens as volatility builds and narrows as it
+    subsides. Confirmed on REAL 2021-2026 shipping-equity returns to hold VaR
+    breaches both at-nominal AND de-clustered across regimes, where the flat
+    historical/parametric VaR is statistically rejected (see
+    ``var_coverage_backtest``). Zero-mean by convention — daily drift is
+    negligible and noisy at the VaR horizon, and it matches the
+    coverage-tested estimator exactly.
+    """
+    if returns is None:
+        return _empty_var(confidence, horizon_days, "ewma")
+    series = pd.Series(returns).dropna()
+    if len(series) < 10:
+        return _empty_var(confidence, horizon_days, "ewma")
+
+    sigma = _ewma_vol(series.to_numpy(dtype=float), lam)
+    if sigma <= 0 or not math.isfinite(sigma):
+        return _empty_var(confidence, horizon_days, "ewma")
+
+    z = _z_alpha(1.0 - confidence)
+    var_pct_1d = z * sigma                       # zero-mean RiskMetrics band
+    var_pct = min(0.0, var_pct_1d * math.sqrt(horizon_days))
+    alpha = 1.0 - confidence
+    phi_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
+    cvar_pct_1d = -sigma * (phi_z / alpha)       # zero-mean Gaussian CVaR
+    cvar_pct = min(0.0, cvar_pct_1d * math.sqrt(horizon_days))
+
+    return VaRResult(
+        confidence=confidence,
+        horizon_days=horizon_days,
+        method="ewma",
+        var_pct=round(var_pct, 6),
+        cvar_pct=round(cvar_pct, 6),
+        portfolio_value=float(portfolio_value),
+        var_dollar=round(abs(var_pct) * portfolio_value, 2),
+        cvar_dollar=round(abs(cvar_pct) * portfolio_value, 2),
+        n_observations=len(series),
+    )
+
+
 def portfolio_var(
     returns_df: pd.DataFrame,
     weights: dict,
@@ -205,6 +278,12 @@ def portfolio_var(
     portfolio_returns = pd.Series(sub.to_numpy() @ w_vec, index=sub.index)
     if method == "parametric":
         return parametric_var(
+            portfolio_returns,
+            confidence=confidence, horizon_days=horizon_days,
+            portfolio_value=portfolio_value,
+        )
+    if method == "ewma":
+        return ewma_var(
             portfolio_returns,
             confidence=confidence, horizon_days=horizon_days,
             portfolio_value=portfolio_value,
@@ -443,7 +522,9 @@ __all__ = [
     "MarketRegime",
     "historical_var",
     "parametric_var",
+    "ewma_var",
     "portfolio_var",
+    "EWMA_LAMBDA",
     "stress_test_scenario",
     "stress_test_all_scenarios",
     "detect_regime",

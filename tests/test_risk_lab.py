@@ -17,12 +17,15 @@ import pandas as pd
 import pytest
 
 from processing.risk_lab import (
+    EWMA_LAMBDA,
     TRADING_DAYS_PER_YEAR,
     MarketRegime,
     ScenarioStressResult,
     VaRResult,
+    _ewma_vol,
     _z_alpha,
     detect_regime,
+    ewma_var,
     historical_var,
     parametric_var,
     portfolio_var,
@@ -157,6 +160,51 @@ def test_parametric_var_matches_gaussian_formula() -> None:
     expected = 0.0 + z * float(r.std(ddof=0))
     # Tolerance loose: sample mean / std aren't exactly μ / σ.
     assert out.var_pct == pytest.approx(expected, abs=0.005)
+
+
+# ─── ewma_var (RiskMetrics vol-adaptive — the live method) ───────────────────
+
+def test_ewma_var_returns_well_formed() -> None:
+    r = _normal_returns(n=252, mu=0.0, sigma=0.02, seed=71)
+    out = ewma_var(r, confidence=0.95, portfolio_value=500_000)
+    assert isinstance(out, VaRResult)
+    assert out.method == "ewma"
+    assert out.var_pct <= 0.0
+    assert out.cvar_pct <= out.var_pct                 # CVaR worse than VaR
+    assert out.n_observations == 252
+    assert out.var_dollar == pytest.approx(abs(out.var_pct) * 500_000, abs=1.0)
+
+
+def test_ewma_var_empty_and_thin_input_safe() -> None:
+    assert ewma_var(None).var_pct == 0.0
+    assert ewma_var(pd.Series(dtype=float)).n_observations == 0
+    assert ewma_var(pd.Series([0.01, -0.01, 0.02])).var_pct == 0.0   # < 10 obs
+
+
+def test_ewma_var_horizon_scaling() -> None:
+    r = _normal_returns(n=252, seed=73)
+    assert ewma_var(r, horizon_days=5).var_pct == pytest.approx(
+        ewma_var(r, horizon_days=1).var_pct * math.sqrt(5), abs=1e-6)
+
+
+def test_ewma_vol_tracks_recent_regime_above_flat_sigma() -> None:
+    # After a sustained vol spike, the EWMA vol forecast exceeds the flat
+    # sample sigma (it weights the recent turbulent returns more) — the whole
+    # point of the method. Deterministic, no network.
+    calm = _normal_returns(n=400, sigma=0.01, seed=74).to_numpy()
+    turbulent = _normal_returns(n=120, sigma=0.06, seed=75).to_numpy()
+    r = np.concatenate([calm, turbulent])
+    ewma_sigma = _ewma_vol(r, EWMA_LAMBDA)
+    flat_sigma = float(np.std(r))
+    assert ewma_sigma > flat_sigma
+    assert np.isfinite(ewma_sigma)
+
+
+def test_portfolio_var_dispatches_to_ewma() -> None:
+    df = pd.DataFrame({"A": _normal_returns(n=300, seed=76),
+                       "B": _normal_returns(n=300, seed=77)})
+    out = portfolio_var(df, {"A": 0.5, "B": 0.5}, method="ewma")
+    assert out.method == "ewma" and out.var_pct <= 0.0 and out.n_observations > 0
 
 
 def test_parametric_var_zero_sigma_safe() -> None:

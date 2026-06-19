@@ -311,7 +311,9 @@ def test_horizon_scaling_increases_tail_by_sqrt():
     one = sized_book_var(book, panel, horizon_days=1)
     four = sized_book_var(book, panel, horizon_days=4)
     assert one.var_pct < 0.0
-    assert four.var_pct == pytest.approx(one.var_pct * 2.0, rel=1e-6)
+    # ×√4 = ×2 exactly in the math; abs tol covers VaRResult's 6-dp rounding
+    # (round(2x,6) vs 2·round(x,6) can differ by 1e-6).
+    assert four.var_pct == pytest.approx(one.var_pct * 2.0, abs=2e-6)
 
 
 def test_parametric_method_is_accepted_and_real():
@@ -323,12 +325,20 @@ def test_parametric_method_is_accepted_and_real():
     assert res.var_pct < 0.0
 
 
-def test_unknown_method_falls_back_to_historical():
+def test_unknown_method_falls_back_to_default():
+    # Invalid method normalizes to the module default (ewma, the live method).
     panel = _identical_two_col_panel()
     book = _book_from_weights({"AAA": 0.1, "BBB": 0.1})
     res = sized_book_var(book, panel, method="bogus")
-    assert res.method == "historical"
+    assert res.method == "ewma"
     assert res.basis == "real"
+
+
+def test_default_method_is_ewma():
+    panel = _identical_two_col_panel()
+    book = _book_from_weights({"AAA": 0.1, "BBB": 0.1})
+    res = sized_book_var(book, panel)
+    assert res.method == "ewma" and res.basis == "real" and res.var_pct < 0.0
 
 
 def test_returns_a_frozen_sized_book_risk_instance():

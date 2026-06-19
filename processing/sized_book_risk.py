@@ -46,9 +46,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from processing.risk_lab import historical_var, parametric_var
+from processing.risk_lab import ewma_var, historical_var, parametric_var
 
-VALID_METHODS: tuple[str, ...] = ("historical", "parametric")
+VALID_METHODS: tuple[str, ...] = ("ewma", "historical", "parametric")
 
 
 @dataclass(frozen=True)
@@ -158,7 +158,7 @@ def sized_book_var(
     *,
     confidence: float = 0.95,
     horizon_days: int = 1,
-    method: str = "historical",
+    method: str = "ewma",
 ) -> SizedBookRisk:
     """Signed long/short VaR + Expected-Shortfall for a conviction-sized book.
 
@@ -196,7 +196,7 @@ def sized_book_var(
         ``basis="real"`` with signed ``var_pct``/``cvar_pct`` when a real
         weighted series was scored; ``basis="empty"`` (zeros) otherwise.
     """
-    method = method if method in VALID_METHODS else "historical"
+    method = method if method in VALID_METHODS else "ewma"
     weights = _signed_weights(sized_book)
 
     if not weights:
@@ -240,7 +240,8 @@ def sized_book_var(
     w_vec = np.array([used[c] for c in common], dtype=float)
     book_returns = pd.Series(sub.to_numpy() @ w_vec, index=sub.index)
 
-    estimator = parametric_var if method == "parametric" else historical_var
+    estimator = {"parametric": parametric_var,
+                 "ewma": ewma_var}.get(method, historical_var)
     var = estimator(
         book_returns,
         confidence=confidence,

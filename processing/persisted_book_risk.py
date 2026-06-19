@@ -104,7 +104,7 @@ def persisted_book_risk(
     *,
     confidence: float = 0.95,
     horizon_days: int = 1,
-    method: str = "historical",
+    method: str = "ewma",
 ) -> PersistedBookRisk:
     """Bridge the persisted book into ``portfolio_var`` + ``stress_test_all_scenarios``.
 

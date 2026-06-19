@@ -384,7 +384,7 @@ def _load_cached_stock_data(cache_dir: str = "cache") -> dict:
 
 
 def run_var_coverage_backtest(
-    *, confidence: float = 0.95, window: int = 60, method: str = "historical",
+    *, confidence: float = 0.95, window: int = 60, method: str = "ewma",
     tickers: Optional[list] = None,
 ) -> VaRCoverageScorecard:
     """Live entry: load REAL cached closes, build the panel, run the coverage
