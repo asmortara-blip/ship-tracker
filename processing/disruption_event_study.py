@@ -79,8 +79,10 @@ NOT_ADVICE = "Descriptive history, not a forecast or investment advice."
 __all__ = [
     "NOT_ADVICE",
     "EventStudyResult",
+    "EventStudySignificance",
     "event_study",
     "aggregate_event_studies",
+    "event_study_significance",
     "rolling_lead_lag_correlation",
     "summarize",
     "real_event_dates",
@@ -137,6 +139,7 @@ class EventStudyResult:
     baseline_mean_daily_return: float
     max_drawdown: float
     max_runup: float
+    estimation_sigma: float = float("nan")   # std of pre-event daily returns (BMP scale)
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +352,11 @@ def event_study(
                 float(np.expm1(np.mean(np.log1p(pre_rets))))
                 if pre_rets.size else float("nan")
             )
+            estimation_sigma = (float(np.std(pre_rets, ddof=1))
+                                if pre_rets.size >= 2 else float("nan"))
         else:
             baseline_mean = float("nan")
+            estimation_sigma = float("nan")
 
         # --- abnormal return: observed window move minus expected drift ----
         # Expected drift = baseline mean daily return compounded over n_post
@@ -377,6 +383,7 @@ def event_study(
             baseline_mean_daily_return=float(baseline_mean),
             max_drawdown=float(max_drawdown),
             max_runup=float(max_runup),
+            estimation_sigma=float(estimation_sigma),
         )
 
     return out
@@ -469,6 +476,126 @@ def _safe_nanmean(arr: np.ndarray) -> float:
     if a.size == 0 or not np.any(np.isfinite(a)):
         return float("nan")
     return float(np.nanmean(a))
+
+
+# ---------------------------------------------------------------------------
+# 2b) Statistical significance — is the abnormal move real, not noise? (S8)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EventStudySignificance:
+    """Inferential test of whether disruption events move shipping equities.
+
+    The unit of inference is the EVENT, not the carrier. Within each event the
+    per-carrier abnormal returns are standardized by their own estimation-window
+    sigma (BMP-style, so different-volatility carriers are comparable) and
+    averaged; the test then runs ACROSS events. Averaging within-event absorbs
+    the strong cross-carrier correlation (every container line moves together on
+    a Suez event) that makes a naive cross-sectional t over-reject — the honest
+    treatment for a small, correlated cross-section, in the spirit of the
+    Kolari-Pynnonen caution. Reports a Student-t p-value AND a bootstrap CI;
+    ``significant`` requires BOTH (p<alpha and the CI excludes zero).
+
+    ``basis="insufficient"`` (no verdict) when too few events yield usable
+    cross-sections — never a fabricated p-value on an empty/thin surface.
+    """
+
+    n_events: int
+    n_observations: int            # total (carrier, event) abnormal returns used
+    mean_abnormal_return: float    # event-level mean RAW abnormal return (fraction)
+    mean_standardized_ar: float    # event-level mean STANDARDIZED AR (BMP units)
+    t_stat: float
+    p_value: float                 # two-sided
+    ci_low: float                  # bootstrap CI on mean_abnormal_return
+    ci_high: float
+    significant: bool              # p < alpha AND bootstrap CI excludes zero
+    basis: str                     # "real" | "insufficient"
+    note: str = ""
+
+
+def event_study_significance(
+    prices_by_ticker,
+    event_dates,
+    *,
+    pre: int = 20,
+    post: int = 20,
+    min_events: int = 3,
+    n_boot: int = 2000,
+    seed: int = 20260620,
+    confidence: float = 0.95,
+) -> EventStudySignificance:
+    """Test whether the mean abnormal return around disruption events ≠ 0.
+
+    Event-level aggregation of BMP-standardized abnormal returns + a Student-t
+    test + a seeded bootstrap percentile CI. Returns ``basis="insufficient"``
+    (no verdict) when fewer than ``min_events`` events yield a usable carrier
+    cross-section. Deterministic (fixed bootstrap seed). Never raises.
+    """
+    alpha = 1.0 - float(confidence)
+    event_sars: list[float] = []
+    event_ars: list[float] = []
+    n_obs = 0
+    for ed in (event_dates or []):
+        try:
+            res = event_study(prices_by_ticker, ed, pre=pre, post=post)
+        except Exception:
+            continue
+        sars, ars = [], []
+        for r in res.values():
+            if (math.isfinite(r.abnormal_return)
+                    and math.isfinite(r.estimation_sigma)
+                    and r.estimation_sigma > 0.0 and r.n_post > 0):
+                se = r.estimation_sigma * math.sqrt(r.n_post)
+                if se > 0.0:
+                    sars.append(r.abnormal_return / se)
+                    ars.append(r.abnormal_return)
+        if sars:
+            event_sars.append(float(np.mean(sars)))
+            event_ars.append(float(np.mean(ars)))
+            n_obs += len(sars)
+
+    n = len(event_sars)
+    if n < int(min_events):
+        return EventStudySignificance(
+            n_events=n, n_observations=n_obs, mean_abnormal_return=float("nan"),
+            mean_standardized_ar=float("nan"), t_stat=0.0, p_value=1.0,
+            ci_low=float("nan"), ci_high=float("nan"), significant=False,
+            basis="insufficient",
+            note=(f"Only {n} event(s) with a usable carrier cross-section "
+                  f"(need >= {min_events}) — significance not evaluated."),
+        )
+
+    sar = np.asarray(event_sars, dtype=float)
+    ar = np.asarray(event_ars, dtype=float)
+    mean_sar = float(sar.mean())
+    mean_ar = float(ar.mean())
+    sd = float(sar.std(ddof=1))
+    if sd > 0.0:
+        t_stat = mean_sar / (sd / math.sqrt(n))
+        try:
+            from scipy.stats import t as _t
+            p_value = float(2.0 * _t.sf(abs(t_stat), df=n - 1))
+        except Exception:
+            p_value = float(math.erfc(abs(t_stat) / math.sqrt(2.0)))
+    else:
+        t_stat, p_value = 0.0, 1.0
+
+    # Seeded bootstrap percentile CI on the event-level mean RAW abnormal return.
+    rng = np.random.default_rng(int(seed))
+    boots = np.array([rng.choice(ar, size=n, replace=True).mean()
+                      for _ in range(int(n_boot))], dtype=float)
+    ci_low = float(np.quantile(boots, alpha / 2.0))
+    ci_high = float(np.quantile(boots, 1.0 - alpha / 2.0))
+
+    significant = bool(p_value < alpha and ci_low * ci_high > 0.0)
+    return EventStudySignificance(
+        n_events=n, n_observations=n_obs, mean_abnormal_return=mean_ar,
+        mean_standardized_ar=mean_sar, t_stat=float(t_stat), p_value=p_value,
+        ci_low=ci_low, ci_high=ci_high, significant=significant, basis="real",
+        note=(f"{n} events x {n_obs} (carrier,event) abnormal returns; event-level "
+              f"BMP-standardized t-test + {int(n_boot)}x bootstrap CI "
+              f"(cross-carrier correlation absorbed by within-event averaging)."),
+    )
 
 
 # ---------------------------------------------------------------------------
