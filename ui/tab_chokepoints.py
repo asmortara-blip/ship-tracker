@@ -929,10 +929,12 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
         # IMF PortWatch transit feed (mirrors worker.run_portwatch_transit_job).
         # Offline-safe + escalate-only: an unavailable/empty feed is a no-op so
         # the baseline stands; Suez/Panama stay owned by the canal overlay above.
+        transit_marker: dict = {}
         try:
             from data.portwatch_feed import fetch_chokepoint_transits
             from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
-            apply_live_chokepoint_transits(fetch_chokepoint_transits())
+            transit_marker = apply_live_chokepoint_transits(
+                fetch_chokepoint_transits()) or {}
         except Exception as _exc:
             logger.debug(f"portwatch->chokepoint UI overlay skipped: {_exc}")
 
@@ -959,6 +961,36 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
                 ],
                 columns=3,
             )
+
+            # S1 provenance: which straits read REAL IMF PortWatch transit data
+            # (and any escalated by a real transit collapse), stated honestly.
+            _names = {"bab_el_mandeb": "Bab-el-Mandeb", "hormuz": "Hormuz",
+                      "malacca": "Malacca", "gibraltar": "Gibraltar", "dover": "Dover",
+                      "danish_straits": "Danish Straits", "lombok_sunda": "Lombok/Sunda"}
+            if transit_marker:
+                live = sorted(_names.get(k, k) for k in transit_marker)
+                escalated = sorted(
+                    (k for k, m in transit_marker.items()
+                     if (m.get("transit_drop") or 0.0) >= 0.15),
+                    key=lambda k: -(transit_marker[k].get("transit_drop") or 0.0))
+                if escalated:
+                    esc = "; ".join(
+                        f"{_names.get(k, k)} −{transit_marker[k]['transit_drop'] * 100:.0f}% "
+                        f"transits → {transit_marker[k]['risk_level']}"
+                        for k in escalated)
+                    st.caption(
+                        f"🛰 **Live transit telemetry (IMF PortWatch)** — {len(live)} "
+                        f"straits on real data. **Escalated by real transit collapse:** "
+                        f"{esc}. (Suez/Panama via the canal feed.)")
+                else:
+                    st.caption(
+                        f"🛰 **Live transit telemetry (IMF PortWatch)** — {len(live)} "
+                        f"straits on real data ({', '.join(live)}); all near baseline "
+                        f"flow. (Suez/Panama via the canal feed.)")
+            else:
+                st.caption(
+                    "🛰 IMF PortWatch transit feed unavailable this load — chokepoint "
+                    "risk on the modeled baseline (no real transit signal fabricated).")
         except Exception as e:
             logger.error(f"header render error: {e}")
 
