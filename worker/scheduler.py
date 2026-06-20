@@ -943,6 +943,33 @@ def run_portwatch_transit_job() -> dict:
         return {"ok": False, "basis": "unavailable", "live": []}
 
 
+def run_deep_history_cache_job() -> dict:
+    """Deepen the risk-universe price cache to multi-year history so the live VaR
+    coverage backtest + book risk run on deep REAL data in production — the EWMA
+    VaR method was validated at this depth (historical is rejected on it).
+
+    Gentle (courtesy sleeps between fetches) + offline-safe: a throttled / empty
+    feed is a DATA condition, not a job failure (``ok`` stays True so we don't
+    hammer yfinance — the daily cadence simply retries next pass; a throttled
+    ticker keeps its existing cache, never overwritten with silence). Never
+    raises.
+    """
+    try:
+        from data.stock_feed import deepen_stock_cache
+        from processing.var_coverage_backtest import _DEFAULT_TICKERS
+
+        res = deepen_stock_cache(list(_DEFAULT_TICKERS), lookback_days=1825)
+        written = sorted(k for k, v in res.items() if v == "written")
+        logger.info(
+            f"run_deep_history_cache_job: deepened {len(written)}/{len(res)} "
+            f"({', '.join(written) or 'none — throttled/offline, existing cache kept'})"
+        )
+        return {"ok": True, "written": written, "n_written": len(written)}
+    except Exception as exc:
+        logger.warning(f"run_deep_history_cache_job: failed: {exc}")
+        return {"ok": False, "written": [], "n_written": 0}
+
+
 @_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
@@ -2459,6 +2486,11 @@ def main(argv: Optional[list] = None) -> int:
     # company-risk history → integrity sweep → GC every tree), in dependency
     # order. Each snapshot tree's GC runs AFTER its save so the same tick
     # never collects today's write.
+    # Deepen the risk-universe price cache to multi-year history (daily cadence;
+    # gentle + throttle-safe) so the live VaR backtest + book risk run on deep
+    # REAL data — the depth the EWMA VaR was validated on.
+    _run_gated("run_deep_history_cache_job", _DAILY_SECONDS, run_deep_history_cache_job,
+               now=now, force=force, label="deep history cache")
     _run_gated("run_port_supply_snapshot_job", _DAILY_SECONDS, run_port_supply_snapshot_job,
                now=now, force=force, label="port supply snapshot")
     _run_gated("run_multi_container_snapshot_job", _DAILY_SECONDS, run_multi_container_snapshot_job,

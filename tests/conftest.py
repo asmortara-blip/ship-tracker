@@ -88,6 +88,22 @@ def _live_feeds_offline_by_default(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _deep_history_offline_by_default(monkeypatch):
+    """``worker.run_deep_history_cache_job`` fetches multi-year yfinance history
+    for the risk universe; neutralize it by default so NO test (especially the
+    scheduler main() pass) hits Yahoo. The ``deepen_stock_cache`` unit tests
+    capture the real function at import time (``_deepen_raw``) and are unaffected;
+    the scheduler job resolves the name at call time → gets this no-op."""
+    try:
+        import data.stock_feed as _sf
+        monkeypatch.setattr(_sf, "deepen_stock_cache", lambda *a, **k: {},
+                            raising=False)
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def block_network(monkeypatch):
     """Fail every outbound TCP connection instantly.

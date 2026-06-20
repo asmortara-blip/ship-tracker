@@ -472,3 +472,42 @@ def test_wrapped_meta_defaults_to_default_tickers_when_none(
     )
     assert series.meta["tickers"] == sf._DEFAULT_TICKERS
     assert series.meta["lookback_days"] == 60
+
+
+# ── deepen_stock_cache (deep-history persistence for the VaR backtest) ────────
+
+# Conftest no-ops data.stock_feed.deepen_stock_cache by default (so the scheduler
+# job never fetches yfinance in tests); capture the REAL function at import to
+# exercise it directly here.
+_deepen_raw = sf.deepen_stock_cache
+
+
+def test_deepen_stock_cache_writes_deep_parquet(tmp_path):
+    def fake_fetch(sym, lookback):
+        assert lookback == 1825
+        return pd.DataFrame({"date": pd.date_range("2021-01-01", periods=5),
+                             "symbol": [sym] * 5, "close": range(5)})
+
+    res = _deepen_raw(["ZIM", "MATX"], lookback_days=1825,
+                      cache_dir=str(tmp_path), inter_request_sleep=0,
+                      fetch=fake_fetch)
+    assert res == {"ZIM": "written", "MATX": "written"}
+    assert (tmp_path / "stocks" / "zim_1825d.parquet").exists()
+    assert (tmp_path / "stocks" / "matx_1825d.parquet").exists()
+
+
+def test_deepen_stock_cache_skips_empty_and_never_raises(tmp_path):
+    def empty_fetch(sym, lookback):
+        return pd.DataFrame()
+
+    def raising_fetch(sym, lookback):
+        raise ConnectionError("throttled")
+
+    assert _deepen_raw(["ZIM"], cache_dir=str(tmp_path),
+                       inter_request_sleep=0, fetch=empty_fetch) == {"ZIM": "skipped"}
+    assert _deepen_raw(["ZIM"], cache_dir=str(tmp_path),
+                       inter_request_sleep=0, fetch=raising_fetch) == {"ZIM": "skipped"}
+    # A skipped (throttled/empty) fetch must NOT write a parquet — silence never
+    # overwrites real cached data.
+    sdir = tmp_path / "stocks"
+    assert not sdir.exists() or not list(sdir.glob("*.parquet"))

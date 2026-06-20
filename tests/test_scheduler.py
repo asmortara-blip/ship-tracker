@@ -711,3 +711,12 @@ def test_main_bulk_export_prune_failure_does_not_block_briefing(monkeypatch) -> 
         main()
 
     assert excinfo.value.code == 0
+
+
+def test_run_deep_history_cache_job_is_offline_safe():
+    # Conftest no-ops deepen_stock_cache -> the job runs without yfinance and
+    # reports ok=True with nothing written (a throttle/offline feed is a data
+    # condition, not a job failure -> cadence advances, no hammering).
+    from worker.scheduler import run_deep_history_cache_job
+    r = run_deep_history_cache_job()
+    assert r["ok"] is True and r["n_written"] == 0 and r["written"] == []
