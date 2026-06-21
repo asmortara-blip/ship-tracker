@@ -77,7 +77,11 @@ def _live_feeds_offline_by_default(monkeypatch, tmp_path):
 
     for mod_name, cache_sub in (("data.sanctions_feed", "sanctions_cache"),
                                 ("data.marine_weather_feed", "marine_cache"),
-                                ("data.portwatch_feed", "portwatch_cache")):
+                                ("data.portwatch_feed", "portwatch_cache"),
+                                # canal_feed scrapes Suez/Panama gov sites; in CI
+                                # those 404 / SSL-error SLOWLY, blowing the 30s
+                                # per-test timeout in scheduler main() tests.
+                                ("data.canal_feed", "canal_cache")):
         try:
             mod = __import__(mod_name, fromlist=["_CACHE_DIR"])
             monkeypatch.setattr(mod, "requests", _NoNet, raising=False)
