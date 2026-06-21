@@ -31,6 +31,8 @@ codebase convention.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -49,6 +51,28 @@ from routes.route_registry import ROUTES, ROUTES_BY_ID
 # ---------------------------------------------------------------------------
 # Component weights — the SSI blend. Asserted to sum to 1.0 at import time.
 # ---------------------------------------------------------------------------
+#
+# These are deliberately HAND-SET and diversified. They are NOT auto-fit to the
+# ``ssi_component_validation`` backtest, and that is intentional.
+#
+# What the validator does confirm (checked across 60 seeds, 2026-06-17): chokepoint
+# is the single strongest component in EVERY seed, and the weak end is the
+# {anomaly, vulnerability, weather} cluster. So giving chokepoint the top weight and
+# that cluster the bottom weights is directionally right. What it does NOT confirm is
+# the exact ordering: the full sign-agreement ranking equals this weight ordering in
+# only ~2/60 seeds, because the middle reshuffles seed-to-seed (the synthetic truth
+# ranks rate above weather and vulnerability above anomaly — the reverse of the tail
+# here). Do not read these weights as a fitted skill ranking; only the chokepoint=top,
+# diversified-tail shape is load-bearing.
+#
+# Why not fit to it anyway: the validator runs on a SYNTHETIC, seeded history with
+# *planted* component→move relationships (see ``synthesize_component_history``), so a
+# "skill-proportional" reweighting would be fitting fixture artifacts, not real
+# predictiveness. The implied magnitudes are wildly seed-dependent (chokepoint's
+# edge-share swings ~0.34–0.66 across seeds) and would over-concentrate the index on
+# one component while zeroing a genuinely-weighted component off a single seed's noise.
+# A real data-driven reweighting requires a REAL per-component predictiveness feed (a
+# roadmap item); until then these published, diversified weights stand.
 
 COMPONENT_WEIGHTS: dict[str, float] = {
     "chokepoint":    0.29,
@@ -94,6 +118,73 @@ _DELAYED_STATUSES: frozenset[str] = frozenset({"Minor Delay", "Major Delay"})
 
 
 # ---------------------------------------------------------------------------
+# Model versioning + config hash — SR 11-7 change management (R120)
+# ---------------------------------------------------------------------------
+# Every edit to the SSI's *scoring* constants must be a deliberate, recorded
+# event: bump :data:`MODEL_VERSION` (semver) and add a row to
+# ``docs/MODEL_CHANGELOG.md`` carrying the new :func:`model_config_hash`. The
+# governance gate in ``tests/test_model_versioning.py`` fails CI if the live
+# hash drifts from the changelog row for the current version, so a weight set
+# can no longer ship silently — a desk officer can read off exactly which
+# constants were live on a given date.
+#
+# This model versions independently of disruption_cascade.
+MODEL_VERSION: str = "1.0.0"
+
+# The exact constants the config hash covers — the load-bearing numeric
+# scoring inputs of the SSI. Labels (_DRIVER_LABELS) and the categorical
+# _DELAYED_STATUSES are intentionally excluded: they do not move any score.
+#   * COMPONENT_WEIGHTS    — the five-/six-way per-route blend weights
+#   * _PROMINENT_ROUTES    — the fleet-roll-up prominence multipliers
+#   * _DEFAULT_ROUTE_WEIGHT— the baseline roll-up weight for ordinary lanes
+#   * _SSI_BANDS           — the score→label/colour band cut-points
+_MODEL_CONFIG_KEYS: tuple[str, ...] = (
+    "COMPONENT_WEIGHTS",
+    "_PROMINENT_ROUTES",
+    "_DEFAULT_ROUTE_WEIGHT",
+    "_SSI_BANDS",
+)
+
+
+def _canonical_model_config() -> dict:
+    """Return the live scoring constants in a canonical, hashable form.
+
+    Floats are rounded to a fixed precision so float-repr noise (e.g. a value
+    re-derived through arithmetic) cannot churn the hash, and every container
+    is reduced to plain ``dict``/``list`` so JSON serialisation with sorted
+    keys is fully deterministic regardless of insertion order.
+    """
+    def _round(obj):
+        if isinstance(obj, float):
+            return round(obj, 6)
+        if isinstance(obj, dict):
+            return {k: _round(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_round(v) for v in obj]
+        return obj
+
+    return {
+        "COMPONENT_WEIGHTS": _round(dict(COMPONENT_WEIGHTS)),
+        "_PROMINENT_ROUTES": _round(dict(_PROMINENT_ROUTES)),
+        "_DEFAULT_ROUTE_WEIGHT": _round(_DEFAULT_ROUTE_WEIGHT),
+        # _SSI_BANDS is a list of (bound, label, colour) tuples -> list of lists.
+        "_SSI_BANDS": _round([list(band) for band in _SSI_BANDS]),
+    }
+
+
+def model_config_hash() -> str:
+    """Deterministic content hash over the live SSI scoring constants.
+
+    A truncated SHA-256 (16 hex chars / 64 bits) of the canonically-serialised
+    config (sorted keys, fixed float precision). Stable across process runs and
+    invariant to dict-insertion order; changes iff a covered weight/threshold
+    changes. Covers exactly :data:`_MODEL_CONFIG_KEYS`.
+    """
+    payload = json.dumps(_canonical_model_config(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
 
@@ -127,6 +218,14 @@ class ShippingStressReport:
     top_disruptions: list[str] = field(default_factory=list)
     wow_change: float = 0.0                    # week-over-week SSI change (placeholder)
     data_timestamp: str = ""                   # ISO 8601 UTC generation time
+    # Per-canal real-vs-modeled marker for the live canal→chokepoint overlay
+    # (R007): {canal: {"realness": "live"|"modeled", "risk_level", "status"}}.
+    canal_data_realness: dict = field(default_factory=dict)
+
+    # Forward-escalation overlay marker (R034). Empty when the overlay is off
+    # (default); when on, {"enabled": True, "horizon": int, "provenance":
+    # "modeled", "note": ...} so consumers label the modeled blend honestly.
+    escalation_overlay: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +241,9 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
 # Component scorers — one private helper per SSI component
 # ---------------------------------------------------------------------------
 
-def _route_chokepoint_stress(route_id: str) -> tuple[float, list[str]]:
+def _route_chokepoint_stress(
+    route_id: str, escalation_horizon: int | None = None,
+) -> tuple[float, list[str]]:
     """Chokepoint-disruption stress for *route_id*.
 
     Returns ``(stress, affected_chokepoints)`` where ``stress`` is in [0, 1]
@@ -156,12 +257,24 @@ def _route_chokepoint_stress(route_id: str) -> tuple[float, list[str]]:
     disrupted chokepoints touching the lane (the worst chokepoint dominates),
     with a small additive bump for each extra disrupted chokepoint to reflect
     compounding exposure.
+
+    ``escalation_horizon`` (R034 overlay) — OPT-IN, DEFAULT-NONE. When ``None``
+    the chokepoint scores are the bare deterministic model (byte-for-byte the
+    historical SSI). When set, the scores blend in the MODELED forward-escalation
+    ladder via ``compute_chokepoint_risk_score(escalation_ladder=True,
+    ladder_horizon=...)`` — a max() blend that can only RAISE a chokepoint above
+    its deterministic floor (pricing the escalation tail), never lower it.
     """
     if route_id not in ROUTES_BY_ID:
         return 0.0, []
 
     try:
-        risk_scores = compute_chokepoint_risk_score()
+        if escalation_horizon is not None:
+            risk_scores = compute_chokepoint_risk_score(
+                escalation_ladder=True, ladder_horizon=int(escalation_horizon),
+            )
+        else:
+            risk_scores = compute_chokepoint_risk_score()
     except Exception:  # pragma: no cover - defensive
         logger.exception("compute_chokepoint_risk_score failed")
         return 0.0, []
@@ -546,6 +659,9 @@ def compute_shipping_stress(
     port_results: list,
     route_results: list,
     voyage_fleet=None,
+    canal_stats=None,
+    chokepoint_transits=None,
+    escalation_horizon: int | None = None,
 ) -> ShippingStressReport:
     """Compute the fleet-wide Shipping Stress Index.
 
@@ -580,6 +696,30 @@ def compute_shipping_stress(
         Always a valid report — empty inputs yield neutral defaults, never a
         crash or exception.
     """
+    # R007: overlay REAL canal-transit state onto the chokepoint registry's
+    # Suez/Panama nodes BEFORE the chokepoint component reads it. Real-only — a
+    # synthetic/modeled canal fallback leaves the hardcoded baseline alone.
+    # Default (canal_stats=None) is a no-op, so the callers that don't supply the
+    # feed (and the whole test suite) keep the deterministic baseline.
+    canal_realness: dict = {}
+    if canal_stats:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            canal_realness = apply_live_canal_state(canal_stats)
+        except Exception:
+            logger.exception("compute_shipping_stress: canal overlay failed")
+
+    # Real PortWatch transit-collapse overlay on the NON-canal straits (additive,
+    # escalate-only, never-downgrade). Default (None) is a no-op, so callers that
+    # don't supply the feed — and the whole test suite — keep the baseline.
+    transit_realness: dict = {}
+    if chokepoint_transits is not None:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+            transit_realness = apply_live_chokepoint_transits(chokepoint_transits)
+        except Exception:
+            logger.exception("compute_shipping_stress: chokepoint transit overlay failed")
+
     delayed_by_route = _delayed_counts_by_route(voyage_fleet)
 
     route_stress: list[RouteStress] = []
@@ -595,7 +735,8 @@ def compute_shipping_stress(
     for route in ROUTES:
         route_id = route.id
 
-        chokepoint_stress, affected_chokepoints = _route_chokepoint_stress(route_id)
+        chokepoint_stress, affected_chokepoints = _route_chokepoint_stress(
+            route_id, escalation_horizon)
         congestion_stress = _route_congestion_stress(route_id, port_results)
         weather_stress = _route_weather_stress(route_id)
         rate_stress = _route_rate_stress(route_id, freight_data)
@@ -680,6 +821,23 @@ def compute_shipping_stress(
         freight_data, macro_data, port_results, route_results, route_stress
     )
 
+    # Forward-escalation overlay provenance (R034). Empty unless the modeled
+    # ladder was blended in, so default reports are unchanged and consumers can
+    # label the blend honestly when it is active.
+    escalation_overlay: dict = {}
+    if escalation_horizon is not None:
+        try:
+            from processing.escalation_ladder import PROVENANCE_NOTE
+            note = PROVENANCE_NOTE
+        except Exception:  # pragma: no cover - defensive
+            note = "MODELED forward-escalation ladder (R034)."
+        escalation_overlay = {
+            "enabled": True,
+            "horizon": int(escalation_horizon),
+            "provenance": "modeled",
+            "note": note,
+        }
+
     logger.debug(
         "compute_shipping_stress: SSI={:.3f} ({}), {} routes, {} disruptions",
         overall_ssi, ssi_label, n_routes, len(top_disruptions),
@@ -694,4 +852,6 @@ def compute_shipping_stress(
         top_disruptions=top_disruptions,
         wow_change=0.0,
         data_timestamp=datetime.now(timezone.utc).isoformat(),
+        canal_data_realness=canal_realness,
+        escalation_overlay=escalation_overlay,
     )

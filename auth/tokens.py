@@ -466,6 +466,18 @@ def verify_token(raw_token: str) -> Optional[str]:
                         f"{row['token_id']!r} matched but is expired"
                     )
                     continue
+                # Account kill-switch (R104): a token for an explicitly-disabled
+                # account is dead — treat exactly like a miss (no last_used
+                # stamp, no user_id). A token whose user row is absent (token-
+                # only / legacy) keeps its prior behaviour (is_user_active
+                # fails open to True).
+                from auth.users import is_user_active
+                if not is_user_active(row["user_id"]):
+                    logger.info(
+                        f"auth.tokens.verify_token: token {row['token_id']!r} "
+                        "matched but the owning account is disabled"
+                    )
+                    continue
                 # Match. Stamp last_used_at (best-effort) and return.
                 record_token_use(row["token_id"])
                 return row["user_id"]

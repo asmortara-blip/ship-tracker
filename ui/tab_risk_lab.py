@@ -100,46 +100,72 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
+def _real_returns_panel(stock_data, tickers: list[str], *, min_obs: int = 60) -> pd.DataFrame:
+    """Daily log-returns from REAL cached closes for the requested tickers.
+
+    The VaR/CVaR/regime engine then runs on the book's actual covariance and
+    tails instead of a synthetic panel with a fixed 0.30 correlation. Returns
+    an EMPTY frame when fewer than 2 tickers have >= ``min_obs`` real returns,
+    so the caller falls back to the synthetic panel (labeled demo).
+    """
+    from processing.book_pnl import returns_panel
+    return returns_panel(stock_data, tickers, min_obs=min_obs)
+
+
 # ─── Section 1: Portfolio VaR strip ─────────────────────────────────────────
 
 def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
                        portfolio_value: float, confidence: float) -> None:
-    """Side-by-side historical + parametric VaR cards."""
+    """VaR cards — EWMA (live) headline + historical/parametric comparison."""
     from processing.risk_lab import portfolio_var
 
     section_header(
         "Portfolio Value-at-Risk",
         subtitle=(
             f"VaR & CVaR at {confidence*100:.0f}% confidence, 1-day horizon. "
-            "Historical = empirical percentile; parametric = Gaussian "
-            "(μ + zα × σ)."
+            "EWMA (RiskMetrics vol-adaptive) is the platform's live method — "
+            "coverage-tested against realized P&L; historical (empirical "
+            "percentile) and parametric (flat Gaussian) shown for comparison."
         ),
     )
 
+    ewma = portfolio_var(returns_df, weights, confidence=confidence,
+                        method="ewma", portfolio_value=portfolio_value)
     hist = portfolio_var(returns_df, weights, confidence=confidence,
                         method="historical", portfolio_value=portfolio_value)
     para = portfolio_var(returns_df, weights, confidence=confidence,
                         method="parametric", portfolio_value=portfolio_value)
 
-    cards = [
+    var_cards = [
+        {"label": "VaR (EWMA · live)",
+         "value": f"{ewma.var_pct*100:+.2f}%",
+         "accent": C_LOW,
+         "sublabel": f"${ewma.var_dollar:,.0f} — vol-adaptive (platform default)"},
         {"label": "VaR (Historical)",
          "value": f"{hist.var_pct*100:+.2f}%",
          "accent": C_LOW,
-         "sublabel": f"${hist.var_dollar:,.0f} on ${portfolio_value:,.0f}"},
-        {"label": "CVaR (Historical)",
-         "value": f"{hist.cvar_pct*100:+.2f}%",
-         "accent": C_LOW,
-         "sublabel": f"${hist.cvar_dollar:,.0f} — expected loss in the tail"},
+         "sublabel": f"${hist.var_dollar:,.0f} — empirical percentile"},
         {"label": "VaR (Parametric)",
          "value": f"{para.var_pct*100:+.2f}%",
          "accent": C_LOW,
-         "sublabel": f"${para.var_dollar:,.0f} — Gaussian assumption"},
+         "sublabel": f"${para.var_dollar:,.0f} — flat Gaussian"},
+    ]
+    cvar_cards = [
+        {"label": "CVaR (EWMA · live)",
+         "value": f"{ewma.cvar_pct*100:+.2f}%",
+         "accent": C_LOW,
+         "sublabel": f"${ewma.cvar_dollar:,.0f} — expected loss in the tail"},
+        {"label": "CVaR (Historical)",
+         "value": f"{hist.cvar_pct*100:+.2f}%",
+         "accent": C_LOW,
+         "sublabel": f"${hist.cvar_dollar:,.0f} — empirical tail mean"},
         {"label": "CVaR (Parametric)",
          "value": f"{para.cvar_pct*100:+.2f}%",
          "accent": C_LOW,
          "sublabel": f"${para.cvar_dollar:,.0f} — closed-form Gaussian"},
     ]
-    metric_card_row(cards, columns=4)
+    metric_card_row(var_cards, columns=3)
+    metric_card_row(cvar_cards, columns=3)
 
 
 # ─── Section 1b: Editorial commentary (per-tab LLM + template fallback) ───
@@ -312,6 +338,340 @@ def _render_stress_table(weights: dict, portfolio_value: float) -> None:
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
+def _build_cascade_ideas(
+    port_results, route_results, freight_data, macro_data, stock_data, insights,
+) -> list:
+    """Run the live disruption cascade -> scored EquityIdea list (defensive).
+
+    Same chain the Idea Engine + scheduler use
+    (compute_shipping_stress -> build_exposure_matrix -> score_equity_ideas).
+    Returns [] on any failure, in which case the Stress-VaR runs with NO
+    directional shock — a coherent ES on the book's real market covariance
+    alone (still honest, just no disruption tilt).
+    """
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.exposure_matrix import build_exposure_matrix
+        from processing.disruption_cascade import score_equity_ideas
+
+        stress_report = compute_shipping_stress(
+            freight_data or {}, macro_data or {},
+            port_results or [], route_results or [],
+        )
+        exposure = build_exposure_matrix(stock_data or {})
+        return score_equity_ideas(
+            stress_report, exposure, stock_data or {}, insights or [],
+        )
+    except Exception as exc:
+        logger.exception(f"risk_lab: cascade ideas build failed: {exc}")
+        return []
+
+
+def _render_stress_var_es(
+    weights: dict, ideas: list, stock_data, portfolio_value: float,
+    confidence: float, *, horizon_days: int = 5,
+) -> None:
+    """Coherent, cascade-grounded Stress-VaR / Expected-Shortfall (R009).
+
+    Unlike the parametric VaR strip (market noise only) and the catalog stress
+    table (hardcoded multipliers), this pushes the LIVE cascade's per-name
+    direction x conviction through the book's REAL return covariance via Monte
+    Carlo, and reports a coherent ES with an exact per-name tail decomposition.
+    """
+    from processing.stress_var import monte_carlo_book_es
+
+    section_header(
+        "Coherent Stress-VaR / Expected Shortfall",
+        subtitle=(
+            "The live disruption cascade pushed into the book's loss "
+            "distribution: per-name direction × conviction shocks over a "
+            f"{horizon_days}-day horizon, drawn against the book's real return "
+            "covariance. ES is coherent (sub-additive); the component split is "
+            "exact — it shows which names own the tail."
+        ),
+    )
+
+    try:
+        r = monte_carlo_book_es(
+            weights, ideas, stock_data,
+            confidence=confidence, horizon_days=horizon_days,
+            portfolio_value=portfolio_value, scenario_name="Live cascade",
+        )
+    except Exception as exc:
+        logger.exception(f"risk_lab: stress-VaR/ES failed: {exc}")
+        st.info("Coherent Stress-VaR could not be computed for this book.")
+        return
+
+    if r.n_names == 0:
+        st.info("No positions to stress.")
+        return
+
+    n_shocked = sum(1 for v in r.shocks_pct.values() if abs(v) > 1e-9)
+    # var_pct/es_pct are SIGNED — under a net-bullish cascade the tail can be a
+    # gain. Label the sign rather than rendering a phantom 'loss'.
+    var_word = "loss" if r.var_pct < 0 else "gain"
+    es_word = "loss" if r.es_pct < 0 else "gain"
+    metric_card_row([
+        {"label": f"Stress VaR ({confidence*100:.0f}%)",
+         "value": f"{r.var_pct*100:+.2f}%",
+         "accent": (C_LOW if r.var_pct < 0 else C_HIGH),
+         "sublabel": f"${abs(r.var_dollar):,.0f} tail {var_word} over {horizon_days}d"},
+        {"label": "Expected Shortfall",
+         "value": f"{r.es_pct*100:+.2f}%",
+         "accent": (C_LOW if r.es_pct < 0 else C_HIGH),
+         "sublabel": f"${abs(r.es_dollar):,.0f} — mean tail {es_word}"},
+        {"label": "Mean Stressed P&L",
+         "value": f"{r.mean_pnl_pct*100:+.2f}%",
+         "accent": (C_HIGH if r.mean_pnl_pct > 0 else C_LOW),
+         "sublabel": f"{n_shocked} of {r.n_names} names cascade-shocked"},
+        {"label": "Covariance basis",
+         "value": ("Real" if r.basis == "real-cov" else "Fallback"),
+         "accent": (C_HIGH if r.basis == "real-cov" else C_MOD),
+         "sublabel": (
+             "book's cached returns" if r.basis == "real-cov"
+             else "diagonal-vol (prices dark)")},
+    ], columns=4)
+
+    # Component-ES bar — each name's exact share of the tail loss (sums to ES).
+    comp = sorted(r.component_es_pct.items(), key=lambda kv: kv[1])  # worst first
+    fig = go.Figure(go.Bar(
+        x=[c * 100 for _, c in comp],
+        y=[t for t, _ in comp],
+        orientation="h",
+        marker_color=[C_LOW if c < 0 else C_HIGH for _, c in comp],
+        text=[f"{c*100:+.2f}%" for _, c in comp],
+        textposition="outside",
+        customdata=[r.shocks_pct.get(t, 0.0) * 100 for t, _ in comp],
+        hovertemplate=(
+            "<b>%{y}</b><br>Tail contribution: %{x:+.2f}%"
+            "<br>Cascade shock: %{customdata:+.1f}%<extra></extra>"
+        ),
+    ))
+    apply_dark_layout(
+        fig, title="Component ES — which names own the tail (sums to ES)",
+        height=max(260, 30 * len(comp) + 90),
+        margin=dict(l=12, r=80, t=46, b=30),
+        xaxis=dict(title=dict(text="ES contribution %",
+                              font=dict(color=C_TEXT2, size=11))),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.caption(
+        "Shock = direction × conviction × severity (capped); 0 for held names "
+        "with no active idea. Components sum to ES exactly (Euler split). "
+        "Illustrative severity scalar, not a price forecast."
+    )
+
+    # Per-driver tail attribution (R065) — re-bucket the per-name component ES
+    # by each name's dominant cascade driver, so the PM sees that several names
+    # may share ONE bet (e.g. a single chokepoint). Sums to ES exactly.
+    try:
+        from processing.stress_var import (
+            component_es_by_driver, idea_driver_map,
+        )
+        by_driver = component_es_by_driver(
+            r.component_es_pct, idea_driver_map(ideas)
+        )
+    except Exception:
+        by_driver = {}
+    if len(by_driver) > 1 or (by_driver and "market" not in by_driver):
+        _DRIVER_LABEL = {
+            "chokepoint": "Chokepoint", "congestion": "Port congestion",
+            "weather": "Weather", "rate": "Freight-rate", "fuel": "Fuel cost",
+            "vulnerability": "Structural", "market": "Market (no idea)",
+        }
+        dsorted = sorted(by_driver.items(), key=lambda kv: kv[1])  # worst first
+        dfig = go.Figure(go.Bar(
+            x=[v * 100 for _, v in dsorted],
+            y=[_DRIVER_LABEL.get(k, k.title()) for k, _ in dsorted],
+            orientation="h",
+            marker_color=[C_LOW if v < 0 else C_HIGH for _, v in dsorted],
+            text=[f"{v*100:+.2f}%" for _, v in dsorted],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Tail share: %{x:+.2f}%<extra></extra>",
+        ))
+        apply_dark_layout(
+            dfig, title="Component ES by cascade driver — which bet owns the tail",
+            height=max(220, 32 * len(dsorted) + 90),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(title=dict(text="ES contribution %",
+                                  font=dict(color=C_TEXT2, size=11))),
+        )
+        st.plotly_chart(dfig, use_container_width=True,
+                        config={"displayModeBar": False})
+        st.caption(
+            "Names rolled up by their dominant cascade driver — a single "
+            "chokepoint bet shared across names shows as one bar."
+        )
+
+
+# ─── Section 2c: Ex-ante risk attribution (R124) ────────────────────────────
+
+def _build_carrier_fits(stock_data, macro_data):
+    """Build (fits, factors_df, weights, is_real) for the ex-ante risk view.
+
+    Reuses tab_portfolio's exact factor-model path: weekly log-returns from the
+    real cached closes, a factor panel from macro_data (FRED/Baltic) with a
+    deterministic synthetic fallback when macro is dark, one OLS fit per carrier,
+    and an equal-weight book over the fitted names — the same representative book
+    the Carrier Factor Lens uses. Returns ``(None, ...)``-shaped emptiness when
+    fewer than two carriers can be fit (caller renders an honest empty-state).
+    """
+    from engine.carrier_factor_model import fit_carrier_factors
+    from ui.tab_portfolio import (
+        _factors_from_macro,
+        _synthetic_factor_frame,
+        _weekly_log_returns,
+    )
+
+    returns_df = _weekly_log_returns(stock_data)
+    if returns_df.empty or returns_df.shape[1] < 2:
+        return {}, pd.DataFrame(), {}, False
+
+    factors_df = _factors_from_macro(macro_data)
+    factors_real = not factors_df.empty and len(factors_df) >= 80
+    if not factors_real:
+        factors_df = _synthetic_factor_frame(returns_df)
+
+    combined_idx = returns_df.index.intersection(factors_df.index)
+    if len(combined_idx) < 60:
+        return {}, pd.DataFrame(), {}, False
+    returns_df = returns_df.loc[combined_idx]
+    factors_df = factors_df.loc[combined_idx]
+
+    fits = fit_carrier_factors(returns_df, factors_df, hac_lags=4)
+    if len(fits) < 1:
+        return {}, pd.DataFrame(), {}, False
+
+    names = list(fits.keys())
+    weights = {n: 1.0 / len(names) for n in names}
+    return fits, factors_df, weights, factors_real
+
+
+def _render_risk_attribution(stock_data, macro_data) -> None:
+    """"What owns the risk" — ex-ante VARIANCE attribution (R124).
+
+    The forward-looking analog of the return attribution: decompose the book's
+    forecast tracking error into per-factor (systematic) and per-name (specific)
+    variance contributions, so the desk sees WHICH factor and WHICH name drive
+    the risk. Stacked bar (factor contributions + a 'specific' bucket) + a small
+    vol / %-factor-vs-specific table.
+    """
+    from engine.carrier_factor_model import factor_covariance, risk_attribution
+
+    section_header(
+        "What owns the risk (ex-ante variance)",
+        subtitle=(
+            "Forecast portfolio variance decomposed into per-factor "
+            "(systematic) and per-name (specific) contributions: σ²ₚ = "
+            "wᵀ(BΩBᵀ + D)w. The forward-looking analog of return attribution — "
+            "which factor and which name drive the book's tracking error. "
+            "Equal-weight over the fitted carriers."
+        ),
+    )
+
+    try:
+        fits, factors_df, weights, factors_real = _build_carrier_fits(
+            stock_data, macro_data,
+        )
+        if not fits:
+            st.info(
+                "Ex-ante risk attribution needs ≥ 2 carriers with enough cached "
+                "return history to fit. Prices appear dark — nothing to decompose."
+            )
+            return
+
+        attr = risk_attribution(weights, fits, factor_covariance(factors_df))
+        if attr.total_variance <= 0.0:
+            st.info("Forecast variance is zero for this book — nothing to attribute.")
+            return
+
+        # ── Headline cards: book vol + factor-vs-specific split ──
+        metric_card_row([
+            {"label": "Forecast Vol (ann)",
+             "value": f"{attr.total_vol * 100:.1f}%",
+             "accent": C_ACCENT,
+             "sublabel": f"equal-wt {attr.n_names} carriers"},
+            {"label": "Factor (systematic)",
+             "value": f"{attr.pct_factor * 100:.0f}%",
+             "accent": C_MOD,
+             "sublabel": f"σ²={attr.factor_variance:.2e}"},
+            {"label": "Specific (name)",
+             "value": f"{attr.pct_specific * 100:.0f}%",
+             "accent": C_TEXT2,
+             "sublabel": f"σ²={attr.specific_variance:.2e}"},
+        ], columns=3)
+
+        # ── Stacked bar: per-factor contributions + one 'Specific' bucket ──
+        # All entries are a share of TOTAL variance (per the .pct field), so the
+        # stacked bar reads as a single book whose segments sum to 100%.
+        factor_items = sorted(
+            attr.per_factor.items(), key=lambda kv: kv[1]["variance"], reverse=True,
+        )
+        labels = [f for f, _ in factor_items] + ["Specific"]
+        pcts = [d["pct"] * 100 for _, d in factor_items] + [attr.pct_specific * 100]
+        colors = [C_ACCENT] * len(factor_items) + [C_TEXT2]
+
+        fig = go.Figure(go.Bar(
+            x=pcts,
+            y=labels,
+            orientation="h",
+            marker_color=colors,
+            text=[f"{p:+.1f}%" for p in pcts],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Share of forecast variance: %{x:+.1f}%<extra></extra>",
+        ))
+        apply_dark_layout(
+            fig,
+            title="Share of forecast variance — by factor + specific (sums to 100%)",
+            height=max(260, 30 * len(labels) + 90),
+            margin=dict(l=12, r=80, t=46, b=30),
+            xaxis=dict(title=dict(text="% of total variance",
+                                  font=dict(color=C_TEXT2, size=11))),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Top specific names (which name owns the idiosyncratic risk) ──
+        name_items = sorted(
+            attr.per_name_specific.items(),
+            key=lambda kv: kv[1]["variance"], reverse=True,
+        )[:6]
+        if name_items:
+            headers = ["Name", "Specific σ² (ann)", "% of total var"]
+            rows = [
+                [
+                    _sans(n, color=C_TEXT, weight=600),
+                    _mono(f"{d['variance']:.2e}", color=C_TEXT2),
+                    _mono(f"{d['pct'] * 100:.1f}%", color=C_LOW),
+                ]
+                for n, d in name_items
+            ]
+            wsj_market_table(headers, rows)
+
+        st.caption(
+            "Per-factor contributions are the row split xₖ·(Ωx)ₖ of the factor "
+            "quadratic form (a hedging factor can read negative); per-name shares "
+            "are wᵢ²σ²ᵢ. Factor + specific buckets sum to the total variance "
+            "exactly. Illustrative — modeled factor exposures, not a price forecast."
+        )
+
+        st.markdown(
+            source_footer([
+                DataSource.live(
+                    "Weekly carrier log-returns from cached closes; factor panel "
+                    "from FRED/Baltic macro_data (modeled)."
+                ) if factors_real else DataSource.demo(
+                    "Weekly carrier log-returns from cached closes; SYNTHETIC "
+                    "factor panel (macro dark) — exposures illustrative."
+                ),
+            ]),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        logger.exception("Risk Lab — ex-ante risk attribution render failed")
+        st.info("Ex-ante risk attribution could not be computed for this book.")
+
+
 # ─── Section 3: Regime detection card ───────────────────────────────────────
 
 def _render_regime_card(returns_df: pd.DataFrame, weights: dict) -> None:
@@ -403,7 +763,8 @@ def render(
                 subtitle=(
                     "Portfolio VaR/CVaR, scenario stress test against the "
                     "canonical catalog, and market-regime classification. "
-                    "Demo: synthetic returns panel."
+                    "Real cached returns where available; synthetic fallback "
+                    "when prices are dark (see footer)."
                 ),
                 badge_text="RISK",
                 badge_color=C_ACCENT,
@@ -427,8 +788,18 @@ def render(
 
             # Build a default equal-weight portfolio over the shipping universe.
             tickers = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
-            weights = {t: 1.0 / len(tickers) for t in tickers}
-            returns_df = _synth_returns_panel(tickers)
+            # Prefer REAL returns from cached closes (so VaR/CVaR/regime use the
+            # book's actual covariance + tails); fall back to the synthetic
+            # panel — labeled demo — only when prices are dark.
+            real_panel = _real_returns_panel(stock_data, tickers)
+            panel_is_real = not real_panel.empty
+            if panel_is_real:
+                returns_df = real_panel
+                avail = list(returns_df.columns)
+                weights = {t: 1.0 / len(avail) for t in avail}
+            else:
+                returns_df = _synth_returns_panel(tickers)
+                weights = {t: 1.0 / len(tickers) for t in tickers}
 
             if returns_df.empty:
                 st.info("Returns panel could not be built. Aborting Risk Lab.")
@@ -444,6 +815,23 @@ def render(
 
             section_divider("Scenario Stress")
             _render_stress_table(weights, portfolio_value)
+
+            # Coherent, cascade-grounded Stress-VaR/ES (R009) — the live
+            # disruption pushed into the book's real loss distribution.
+            section_divider("Coherent Stress-VaR")
+            ideas = _build_cascade_ideas(
+                port_results, route_results, freight_data, macro_data,
+                stock_data, insights,
+            )
+            _render_stress_var_es(
+                weights, ideas, stock_data, portfolio_value, confidence,
+            )
+
+            # Ex-ante RISK attribution (R124) — decompose forecast variance into
+            # per-factor + per-name shares, the forward-looking analog of the
+            # return attribution. Own section + provenance footer inside.
+            section_divider("Ex-ante Risk Attribution")
+            _render_risk_attribution(stock_data, macro_data)
 
             section_divider("Regime")
             _render_regime_card(returns_df, weights)
@@ -519,9 +907,13 @@ def render(
 
             st.markdown(
                 source_footer([
-                    DataSource.demo(
+                    DataSource.live(
+                        "Real per-ticker daily returns from cached yfinance "
+                        "closes. Scenario catalog from state/scenarios.py."
+                    ) if panel_is_real else DataSource.demo(
                         "Synthetic 2-year returns panel (per-ticker mean/vol via "
-                        "stable_hash). Scenario catalog from state/scenarios.py."
+                        "stable_hash) — prices unavailable. Scenario catalog "
+                        "from state/scenarios.py."
                     ),
                 ]),
                 unsafe_allow_html=True,

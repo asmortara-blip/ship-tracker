@@ -15,6 +15,10 @@ import streamlit as st
 from loguru import logger
 
 from data.quality import DataSource
+from routes.rate_estimator import (
+    compute_net_freight,
+    net_freight_divergence,
+)
 from utils.helpers import stable_hash
 from ui.styles import (
     C_ACCENT,
@@ -27,6 +31,7 @@ from ui.styles import (
     apply_dark_layout,
     badge,
     insight_card_html,
+    live_data_badge,
     metric_card_row,
     page_header,
     section_divider,
@@ -83,6 +88,23 @@ _HEDGE_SRC = DataSource(
     kind="modeled",
     quality="demo",
     notes="Demo correlation, vol, and swap quotes",
+)
+# Net-freight (R050): crude anchor is REAL when FRED WTI is live; the
+# crude→VLSFO conversion + fuel-leg are always modeled.
+_NETFREIGHT_REAL_SRC = DataSource(
+    name="FRED WTI crude (live) + modeled bunker/fuel-leg",
+    kind="live",
+    quality="good",
+    url="https://fred.stlouisfed.org/series/DCOILWTICO",
+    notes="Net freight = gross $/FEU − fuel leg. Crude anchored on real FRED "
+          "WTI (DCOILWTICO); crude→VLSFO (×6.35 +$95/MT) + fuel-leg are modeled.",
+)
+_NETFREIGHT_MODELED_SRC = DataSource(
+    name="Net-Freight Model (modeled crude fallback)",
+    kind="modeled",
+    quality="modeled",
+    notes="FRED WTI unavailable — crude anchored on a modeled fallback "
+          "($72/bbl). Entire net-freight figure is modeled.",
 )
 
 
@@ -382,6 +404,198 @@ def _bunker_optimization_calculator() -> None:
         st.info("Bunker calculator unavailable.")
 
 
+# ── Section 4b: Bunker-Adjusted Net Freight (TCE proxy, R050) ──────────────────
+
+def _net_freight_panel(freight_data=None, macro_data=None, route_results=None) -> None:
+    section_header(
+        "Bunker-Adjusted Net Freight",
+        "Margin net of fuel, not just gross spot — crude-anchored. "
+        "Flags 'gross up, net down' when a rate rally is eaten by bunkers.",
+    )
+    try:
+        from routes.route_registry import ROUTES_BY_ID
+        from data.fred_feed import get_latest_value
+
+        # ── Real crude anchor (cache-backed, offline-safe). get_latest_value
+        # reads the already-fetched FRED payload; NO hot/uncached fetch here.
+        crude = None
+        if macro_data:
+            crude = get_latest_value("DCOILWTICO", macro_data)
+            if crude is None or crude <= 0:
+                # Fall back to Brent if WTI is dark but Brent is live.
+                crude = get_latest_value("DCOILBRENTEU", macro_data)
+        crude = float(crude) if (crude is not None and crude > 0) else None
+        is_real = crude is not None
+        src = _NETFREIGHT_REAL_SRC if is_real else _NETFREIGHT_MODELED_SRC
+
+        # ── Gather gross rates per route (current $/FEU).
+        gross_by_route: dict[str, float] = {}
+        if freight_data:
+            for rid, df in freight_data.items():
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        continue
+                    if "rate_usd_per_feu" not in df.columns:
+                        continue
+                    rates = df["rate_usd_per_feu"].dropna()
+                    if not rates.empty:
+                        gross_by_route[rid] = float(rates.iloc[-1])
+                except Exception:
+                    continue
+
+        if not gross_by_route:
+            st.info(
+                "No gross freight rates available — net freight needs a live "
+                "rate feed (rate_usd_per_feu per route)."
+            )
+            st.markdown(source_footer([src]), unsafe_allow_html=True)
+            return
+
+        # Provenance badge: REAL crude vs modeled fallback.
+        st.markdown(
+            live_data_badge(src)
+            + (
+                f'<span style="margin-left:8px;color:{C_TEXT3};font-family:var(--mono);'
+                f'font-size:0.72rem;">WTI ${crude:.2f}/bbl</span>'
+                if is_real else
+                f'<span style="margin-left:8px;color:{C_TEXT3};font-family:var(--mono);'
+                f'font-size:0.72rem;">modeled crude $72.00/bbl</span>'
+            ),
+            unsafe_allow_html=True,
+        )
+
+        headers = ["Route", "Gross $/FEU", "Fuel Leg $/FEU", "Net $/FEU", "Net Margin", "Distance"]
+        rows = []
+        eaten_routes = []
+        for rid in sorted(gross_by_route):
+            gross = gross_by_route[rid]
+            nf = compute_net_freight(rid, gross, crude_usd_per_bbl=crude)
+            name = ROUTES_BY_ID[rid].name if rid in ROUTES_BY_ID else rid
+            net_color = C_HIGH if nf.net_freight_usd_per_feu > 0 else C_LOW
+            margin_color = (
+                C_HIGH if nf.net_margin_pct > 0.5
+                else (C_MOD if nf.net_margin_pct > 0.0 else C_LOW)
+            )
+            if nf.net_freight_usd_per_feu < 0:
+                eaten_routes.append(name)
+            rows.append([
+                _sans(name, color=C_TEXT, weight=600),
+                _mono(f"${gross:,.0f}", color=C_TEXT),
+                _mono(f"−${nf.fuel_leg_usd_per_feu:,.0f}", color=C_MOD),
+                _mono(
+                    f"{'−' if nf.net_freight_usd_per_feu < 0 else ''}"
+                    f"${abs(nf.net_freight_usd_per_feu):,.0f}",
+                    color=net_color,
+                ),
+                _mono(f"{nf.net_margin_pct * 100:,.0f}%", color=margin_color),
+                _mono(f"{nf.distance_nm:,.0f} nm", color=C_TEXT3),
+            ])
+        wsj_market_table(headers, rows)
+
+        if eaten_routes:
+            st.markdown(
+                insight_card_html(
+                    title="Fuel-Eaten Routes (net freight below zero)",
+                    score=1.0,
+                    action="Caution",
+                    rationale=(
+                        "On these lanes the modeled fuel leg exceeds the gross "
+                        "spot rate — net freight is NEGATIVE at current crude: "
+                        + ", ".join(eaten_routes[:6])
+                        + (" …" if len(eaten_routes) > 6 else "")
+                        + ". Shown honestly, not clamped to zero."
+                    ),
+                    category="ROUTE",
+                ),
+                unsafe_allow_html=True,
+            )
+
+        # ── 'Gross up, net down' divergence over a 30-obs window per route.
+        # DATE-ALIGN the crude anchor to each route's gross window-START (vs the
+        # latest print) so a rising fuel cost over the window can actually eat
+        # the rally and fire the alert. With the same crude at both ends the fuel
+        # leg is constant and net_change==gross_change, making the alert
+        # mathematically unreachable (review) — so we read the real crude AS OF
+        # the window-start date from the FRED history. When crude is dark or has
+        # no history the check stays honestly inert.
+        import pandas as pd
+
+        crude_hist = None
+        for _sid in ("DCOILWTICO", "DCOILBRENTEU"):
+            _cs = macro_data.get(_sid) if macro_data else None
+            if isinstance(_cs, pd.DataFrame) and {"date", "value"} <= set(_cs.columns):
+                _cs = _cs.dropna(subset=["value"]).copy()
+                _cs["date"] = pd.to_datetime(_cs["date"], errors="coerce")
+                _cs = _cs.dropna(subset=["date"]).sort_values("date")
+                if not _cs.empty:
+                    crude_hist = _cs
+                    break
+
+        def _crude_at(dt):
+            """Real crude at-or-before ``dt``; else the latest print (inert)."""
+            if crude_hist is not None and dt is not None and pd.notna(dt):
+                prior = crude_hist[crude_hist["date"] <= dt]
+                if not prior.empty:
+                    return float(prior["value"].iloc[-1])
+            return crude
+
+        diverged = []
+        for rid in sorted(gross_by_route):
+            df = freight_data.get(rid)
+            try:
+                if df is None or getattr(df, "empty", True):
+                    continue
+                rates = df["rate_usd_per_feu"].dropna()
+                if len(rates) < 2:
+                    continue
+                window = min(30, len(rates) - 1)
+                gross_start = float(rates.iloc[-(window + 1)])
+                gross_end = float(rates.iloc[-1])
+                start_dt = None
+                if "date" in getattr(df, "columns", []):
+                    try:
+                        start_dt = pd.to_datetime(
+                            df["date"], errors="coerce").iloc[-(window + 1)]
+                    except Exception:
+                        start_dt = None
+                dv = net_freight_divergence(
+                    rid, gross_start, gross_end,
+                    crude_start_usd_per_bbl=_crude_at(start_dt),
+                    crude_end_usd_per_bbl=crude,
+                )
+                if dv.diverged:
+                    name = ROUTES_BY_ID[rid].name if rid in ROUTES_BY_ID else rid
+                    diverged.append((name, dv))
+            except Exception:
+                continue
+
+        if diverged:
+            for name, dv in diverged:
+                st.markdown(
+                    insight_card_html(
+                        title=f"Gross Up, Net Down — {name}",
+                        score=1.0,
+                        action="Alert",
+                        rationale=(
+                            f"Gross rate rose +${dv.gross_change_usd_per_feu:,.0f}/FEU "
+                            f"over the window, but net freight moved "
+                            f"{'+' if dv.net_change_usd_per_feu >= 0 else '−'}"
+                            f"${abs(dv.net_change_usd_per_feu):,.0f}/FEU — the rally "
+                            f"was eaten by fuel."
+                        ),
+                        category="CONVERGENCE",
+                    ),
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No 'gross up, net down' divergence detected over the recent window.")
+
+        st.markdown(source_footer([src]), unsafe_allow_html=True)
+    except Exception as exc:
+        logger.warning(f"Net freight panel error: {exc}")
+        st.info("Net freight panel unavailable.")
+
+
 # ── Section 5: Fuel Spread Analysis ───────────────────────────────────────────
 
 def _fuel_spread_analysis() -> None:
@@ -665,11 +879,29 @@ def _bunker_hedging() -> None:
 
 # ── Main render ────────────────────────────────────────────────────────────────
 
-def render(macro_data=None, freight_data=None, *args, **kwargs) -> None:
-    """Render the Bunker Fuel Intelligence tab."""
+def render(*args, **kwargs) -> None:
+    """Render the Bunker Fuel Intelligence tab.
+
+    Called positionally from app.py as ``render(freight_data, macro_data,
+    route_results)``. Accepts either positional or keyword forms so the
+    net-freight panel (R050) gets the *correct* freight_data + macro_data
+    regardless of caller convention.
+    """
+    # Resolve args robustly: positional order is (freight_data, macro_data,
+    # route_results); keywords win if supplied.
+    freight_data = kwargs.get("freight_data")
+    macro_data = kwargs.get("macro_data")
+    route_results = kwargs.get("route_results")
+    if freight_data is None and len(args) >= 1:
+        freight_data = args[0]
+    if macro_data is None and len(args) >= 2:
+        macro_data = args[1]
+    if route_results is None and len(args) >= 3:
+        route_results = args[2]
+
     # Lazy import keeps perf_telemetry off the tab-load critical path.
     from engine.perf_telemetry import track_render
-    
+
     with track_render('bunker'):
         try:
             page_header(
@@ -691,6 +923,11 @@ def render(macro_data=None, freight_data=None, *args, **kwargs) -> None:
         _bunker_price_chart()
         section_divider("Voyage Economics")
         _bunker_optimization_calculator()
+        _net_freight_panel(
+            freight_data=freight_data,
+            macro_data=macro_data,
+            route_results=route_results,
+        )
         _fuel_spread_analysis()
         section_divider("Fuel Transition")
         _alternative_fuels_comparison()

@@ -634,27 +634,48 @@ def _render_cointegration(
 
     reports.sort(key=lambda r: r.engle_granger.coint_pvalue)
 
-    headers = ["Pair", "β̂", "EG p-value", "λ (ECM)", "Half-life (days)", "Signal"]
+    # Multiple-testing correction (R114): testing many pairs and trading the
+    # smallest p-value is a data-mining surface. Gate trade signals on the
+    # Benjamini-Hochberg FDR survivors across the whole family of pairs, not on
+    # each pair's raw p < 0.05.
+    from processing.stat_significance import TrialsLedger  # noqa: PLC0415
+    _ledger = TrialsLedger("cointegration")
+    for _r in reports:
+        _eg = _r.engle_granger
+        _ledger.add(f"{_eg.y_name}-{_eg.x_name}", _eg.coint_pvalue)
+    _fdr = {c.name: c for c in _ledger.corrected(alpha=0.05)}
+
+    headers = ["Pair", "β̂", "EG p-value", "BH q-value", "λ (ECM)",
+               "Half-life (days)", "Signal"]
     table_rows = []
     for r in reports:
         eg = r.engle_granger
         ecm = r.ecm
         p = eg.coint_pvalue
         p_color = C_HIGH if p < 0.05 else (C_MOD if p < 0.10 else C_TEXT3)
+        cv = _fdr.get(f"{eg.y_name}-{eg.x_name}")
+        survives_fdr = bool(cv and cv.survives_fdr)
+        q = cv.bh_qvalue if cv else 1.0
+        q_color = C_HIGH if survives_fdr else (C_MOD if q < 0.10 else C_TEXT3)
         hl = ecm.half_life_days
         hl_txt = f"{hl:,.1f}" if np.isfinite(hl) else "∞"
         hl_color = C_HIGH if np.isfinite(hl) and hl < 60 else C_TEXT2
         lam_color = C_HIGH if ecm.lambda_y < 0 and ecm.lambda_y_tstat < -2 else C_TEXT2
         z = r.spread_zscore
-        if abs(z) > 2 and eg.is_cointegrated:
+        # A tradeable signal requires surviving the family-wise FDR, not just a
+        # raw p < 0.05 (which the smallest-of-N pair almost always clears).
+        if abs(z) > 2 and eg.is_cointegrated and survives_fdr:
             sig = (
                 f"SHORT {eg.y_name}/{eg.x_name}" if z > 0
                 else f"LONG {eg.y_name}/{eg.x_name}"
             )
             sig_color = C_LOW if z > 0 else C_HIGH
-        elif eg.is_cointegrated:
+        elif eg.is_cointegrated and survives_fdr:
             sig = f"Watch · z={z:+.2f}"
             sig_color = C_MOD
+        elif eg.is_cointegrated:
+            sig = "Cointegrated · fails FDR"
+            sig_color = C_TEXT3
         else:
             sig = "No cointegration"
             sig_color = C_TEXT3
@@ -667,14 +688,66 @@ def _render_cointegration(
             pair_cell,
             _mono(f"{eg.beta:.3f}", color=C_TEXT),
             _mono(f"{p:.4f}", color=p_color),
+            _mono(f"{q:.4f}", color=q_color),
             _mono(f"{ecm.lambda_y:+.3f}", color=lam_color),
             _mono(hl_txt, color=hl_color),
             _sans(sig, color=sig_color, weight=700),
         ])
     wsj_market_table(headers, table_rows)
+    _n_surv = sum(1 for c in _fdr.values() if c.survives_fdr)
+    st.caption(
+        f"Signals gated on Benjamini-Hochberg FDR (α=0.05) across {len(_fdr)} "
+        f"tested pairs — {_n_surv} survive. Corrects for testing many pairs and "
+        "reporting the best (R114 multiple-testing haircut)."
+    )
 
     top = reports[0]
     if top.engle_granger.is_cointegrated:
+        # Spread-strategy walk-forward backtest — gross vs NET of an assumed
+        # turnover cost (R103). Trading the spread means trading both legs each
+        # entry/exit; this shows whether the mean-reversion edge survives that.
+        try:
+            from engine.cointegration import walk_forward_backtest  # noqa: PLC0415
+            sa = all_series.get(top.y, pd.Series(dtype=float)).dropna()
+            sb = all_series.get(top.x, pd.Series(dtype=float)).dropna()
+            common = sa.index.intersection(sb.index)
+            if len(common) >= 160:
+                yv = sa.loc[common].astype(float); yv.name = top.y
+                xv = sb.loc[common].astype(float); xv.name = top.x
+                bt = walk_forward_backtest(yv, xv)
+                metric_card_row([
+                    {"label": "Spread Sharpe (gross)",
+                     "value": f"{bt.sharpe:+.2f}",
+                     "accent": C_HIGH if bt.sharpe > 0 else C_LOW,
+                     "sublabel": f"{bt.n_trades} trades · walk-forward"},
+                    {"label": "Spread Sharpe (net of cost)",
+                     "value": f"{bt.net_sharpe:+.2f}",
+                     "accent": C_HIGH if bt.net_sharpe > 0 else C_LOW,
+                     "sublabel": "after assumed turnover cost (both legs)"},
+                    {"label": "Info Ratio vs B&H",
+                     "value": f"{bt.information_ratio:+.2f}",
+                     "accent": C_HIGH if bt.information_ratio > 0 else C_LOW,
+                     "sublabel": f"{top.y} – {top.x}"},
+                ], columns=3)
+                # Regime-conditional: does the spread edge survive high-vol tape?
+                try:
+                    from processing.regime_conditional import survives_in_stress  # noqa: PLC0415
+                    strat_ret = bt.equity_curve.diff().dropna()
+                    if len(strat_ret) >= 60 and float(strat_ret.std()) > 0:
+                        rc = survives_in_stress(strat_ret, periods_per_year=252)
+                        hv = rc["by_regime"].get("high-vol")
+                        lv = rc["by_regime"].get("low-vol")
+                        if hv and lv:
+                            verdict = ("survives high-vol" if rc["survives_in_stress"]
+                                       else "calm-tape only")
+                            st.caption(
+                                f"Regime-conditional — spread Sharpe in high-vol "
+                                f"{hv.sharpe:+.2f} vs low-vol {lv.sharpe:+.2f}: "
+                                f"{verdict}.")
+                except Exception as exc:
+                    logger.debug(f"coint regime split skipped: {exc}")
+        except Exception as exc:
+            logger.debug("coint backtest spotlight skipped: {}", exc)
         try:
             spread = top.spread
             mu = float(spread.mean())

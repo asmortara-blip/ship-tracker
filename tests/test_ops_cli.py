@@ -2570,3 +2570,35 @@ def test_disruption_explain_routes_top_3_prints_headlines(capsys) -> None:
             line for line in out.splitlines() if line.startswith("[")
         ]
         assert len(bracketed_lines) <= 3
+
+
+# ─── users (account kill-switch CLI; R104) ──────────────────────────────────
+
+def test_users_list_disable_enable_roundtrip(capsys) -> None:
+    from auth.users import login, signup
+    u = signup("alice", "correct-horse-battery")
+    assert u is not None
+
+    code, out, _ = _run(["users", "list"], capsys)
+    assert code == 0 and "alice" in out and "yes" in out
+
+    code, out, _ = _run(["users", "disable", u.user_id], capsys)
+    assert code == 0 and "disabled" in out.lower()
+    assert login("alice", "correct-horse-battery") is None  # CLI killed the login
+
+    code, out, _ = _run(["users", "enable", u.user_id], capsys)
+    assert code == 0 and "enabled" in out.lower()
+    assert login("alice", "correct-horse-battery") is not None  # restored
+
+
+def test_users_disable_unknown_is_noop(capsys) -> None:
+    code, out, _ = _run(["users", "disable", "ghost-id"], capsys)
+    assert code == 0 and "not found" in out.lower()
+
+
+def test_users_list_shows_active_status(capsys) -> None:
+    from auth.users import deactivate_user, signup
+    u = signup("bob", "correct-horse-battery")
+    deactivate_user(u.user_id)
+    code, out, _ = _run(["users", "list"], capsys)
+    assert code == 0 and "bob" in out and "NO" in out  # disabled shows NO

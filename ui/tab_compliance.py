@@ -33,6 +33,7 @@ from ui.styles import (
     C_TEXT,
     C_TEXT2,
     C_TEXT3,
+    alert_banner,
     apply_dark_layout,
     badge,
     insight_card_html,
@@ -526,16 +527,54 @@ def _section_1_dashboard() -> None:
         st.error("Dashboard unavailable.")
 
 
+def _try_live_sanctions():
+    """Attempt a live OFAC SDN screen (R024). OFFLINE-SAFE — never raises.
+
+    Returns ``(rows, source)`` when the live consolidated list parsed (REAL
+    provenance), else ``(None, None)`` so the caller keeps its modeled rows. The
+    feed is cache-backed + offline-safe; a failure here must degrade silently.
+    """
+    try:
+        from data.sanctions_feed import fetch_ofac_sdn, sanctions_rows
+        sl = fetch_ofac_sdn()
+        if sl and sl.is_real:
+            rows = sanctions_rows(sl)
+            if rows:
+                return rows, sl.source
+    except Exception:
+        logger.debug("compliance: live OFAC screen unavailable — modeled fallback", exc_info=True)
+    return None, None
+
+
 def _section_2_sanctions_table() -> None:
     try:
+        # ── R024: prefer a LIVE OFAC SDN screen when the keyless feed returns;
+        # fall back to the modeled rows (clearly labelled) when dark. ──────────
+        live_rows, live_source = _try_live_sanctions()
+        is_live = live_rows is not None
+
         severity_filter = st.selectbox(
             "Filter by severity",
             ["All", "Critical", "High", "Moderate"],
             key="sanct_severity_filter",
         )
-        rows_data = _SANCTIONS_ROWS
+        rows_data = live_rows if is_live else _SANCTIONS_ROWS
         if severity_filter != "All":
             rows_data = [r for r in rows_data if r["severity"] == severity_filter.lower()]
+
+        if is_live:
+            from ui.styles import live_data_badge
+            st.markdown(
+                "Live screen against the U.S. Treasury OFAC SDN consolidated "
+                f"list ({len(live_rows)} vessel designations shown). "
+                + live_data_badge(live_source),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(
+                "ILLUSTRATIVE — live OFAC SDN feed offline; showing modeled "
+                "reference rows, not a live screen."
+            )
 
         headers = [
             "Jurisdiction", "Sanctioned Entities", "Vessel Types",
@@ -554,12 +593,15 @@ def _section_2_sanctions_table() -> None:
             for r in rows_data
         ]
         wsj_market_table(headers, rows)
-        st.markdown(source_footer([
-            {"name": "OFAC SDN List",       "kind": "modeled", "quality": "demo"},
-            {"name": "EUR-Lex OJ",          "kind": "modeled", "quality": "demo"},
-            {"name": "UK OFSI",             "kind": "modeled", "quality": "demo"},
-            {"name": "UN SC Resolutions",   "kind": "modeled", "quality": "demo"},
-        ]), unsafe_allow_html=True)
+        if is_live:
+            st.markdown(source_footer([live_source]), unsafe_allow_html=True)
+        else:
+            st.markdown(source_footer([
+                {"name": "OFAC SDN List",       "kind": "modeled", "quality": "demo"},
+                {"name": "EUR-Lex OJ",          "kind": "modeled", "quality": "demo"},
+                {"name": "UK OFSI",             "kind": "modeled", "quality": "demo"},
+                {"name": "UN SC Resolutions",   "kind": "modeled", "quality": "demo"},
+            ]), unsafe_allow_html=True)
     except Exception:
         logger.exception("Sanctions table error")
         st.error("Sanctions table unavailable.")
@@ -917,6 +959,55 @@ def _section_8_risk_score() -> None:
         ]
         wsj_market_table(rec_headers, rec_rows)
 
+        # ── R128: KYC/screening audit trail. Record this screening run (its
+        # modeled inputs, the list-version stamp, the score, the decision, and
+        # the operator) to the append-only audit log so a regulator can later
+        # replay "why was this cleared on that date". Best-effort — a failed
+        # audit write must NOT break the calculator render. The basis is
+        # stamped illustrative=True (the screening CONTENT is modeled — the
+        # audit SUBSTRATE is real; it records exactly what was screened).
+        _decision = (
+            "block" if score >= 75 else "flag" if score >= 40 else "clear"
+        )
+        try:
+            from auth.audit import record_screening
+
+            # Record ONCE per distinct screened state, NOT on every Streamlit
+            # rerun (this section body re-executes on every script run, even
+            # collapsed in its expander) — else the regulator-facing audit log
+            # floods with near-duplicate rows and the hash-chain write lock
+            # contends with the scheduler. Dedupe on the screened inputs+verdict.
+            _screen_key = (
+                f"{party}|{route}|{cargo}|{int(round(score))}|{_decision}"
+                "|illustrative-matrix/2026.06"
+            )
+            if st.session_state.get("_last_screening_key") != _screen_key:
+                record_screening(
+                    subject=f"{party} · {route}",
+                    inputs={
+                        "route": route, "cargo": cargo, "counterparty": party,
+                        "route_risk": route_r, "cargo_risk": cargo_r,
+                        "counterparty_risk": party_r,
+                        "weights": {"route": 0.45, "counterparty": 0.40, "cargo": 0.15},
+                    },
+                    # Illustrative list-version stamp: the curated matrices that
+                    # produced this score are modeled, not a live SDN/PSC snapshot.
+                    list_version="illustrative-matrix/2026.06",
+                    score=float(score),
+                    decision=_decision,
+                    illustrative=True,
+                )
+                st.session_state["_last_screening_key"] = _screen_key
+            st.caption(
+                "Audit trail: this screening run was recorded for regulator-facing "
+                "replay (subject · inputs · list version · score · decision · "
+                "operator). The audit substrate is real; the screened inputs are "
+                "illustrative / modeled."
+            )
+        except Exception:
+            # Audit is best-effort — never break the calculator on a write fail.
+            logger.debug("compliance screening audit-record failed", exc_info=True)
+
         st.caption("Risk scores are illustrative guidance only. Not legal advice. Consult qualified sanctions counsel before any fixture decision.")
         st.markdown(source_footer([
             {"name": "Internal compliance heuristic", "kind": "modeled", "quality": "demo"},
@@ -925,6 +1016,116 @@ def _section_8_risk_score() -> None:
     except Exception:
         logger.exception("Risk score calculator error")
         st.error("Risk score calculator unavailable.")
+
+
+def _section_9_ais_integrity() -> None:
+    """AIS Integrity / Dark Activity (R049) — coverage gaps + spoof teleports.
+
+    Runs the REAL great-circle / implied-speed detectors over the SYNTHETIC
+    modeled voyage fleet, so every anomaly shown is ILLUSTRATIVE — a demo of
+    the capability on modeled data, not real vessel intelligence. Best-effort:
+    own try/except, honest empty state, never breaks the tab. Also emits an
+    AIS_ANOMALY alert for the worst anomalies (best-effort).
+    """
+    try:
+        st.markdown(insight_card_html(
+            title="AIS Integrity / Dark Activity — MODELED Capability Demo",
+            score=0.50,
+            action="Watch",
+            rationale=(
+                "Detects two flagship dark-activity signals: AIS coverage GAPS that "
+                "fall inside a high-risk geofence (a transponder going dark near a "
+                "sanctioned chokepoint) and kinematic-impossibility TELEPORTS (an "
+                "implied speed no real ship could achieve — a position spoof). The "
+                "detection math is real (great-circle distance + vessel-type speed "
+                "bands), but it runs over the SYNTHETIC modeled voyage fleet, so the "
+                "anomalies below are ILLUSTRATIVE — a demo of the capability, NOT "
+                "real vessel-tracking intelligence."
+            ),
+            category="REFERENCE",
+        ), unsafe_allow_html=True)
+
+        anomalies: list = []
+        try:
+            from data.voyage_dataset import build_voyage_fleet
+            from processing.ais_integrity import scan_fleet
+
+            anomalies = scan_fleet(build_voyage_fleet())
+        except Exception:
+            logger.exception("AIS integrity scan failed")
+            anomalies = []
+
+        if not anomalies:
+            st.info(
+                "No AIS-integrity anomalies surfaced on the current modeled fleet. "
+                "(This is illustrative — a clean synthetic fleet, not a live screen.)"
+            )
+            return
+
+        gaps = sum(1 for a in anomalies if a.kind == "GAP")
+        teleports = sum(1 for a in anomalies if a.kind == "TELEPORT")
+        crit = sum(1 for a in anomalies if a.severity == "CRITICAL")
+        metric_card_row(
+            [
+                {"label": "Coverage Gaps (in high-risk zones)",
+                 "value": str(gaps), "accent": C_LOW,
+                 "sublabel": "transponder dark near a chokepoint"},
+                {"label": "Kinematic Teleports (spoof flags)",
+                 "value": str(teleports), "accent": C_MOD,
+                 "sublabel": "implied speed > vessel max"},
+                {"label": "Critical Severity",
+                 "value": str(crit), "accent": C_LOW,
+                 "sublabel": "worst anomalies"},
+            ],
+            columns=3,
+        )
+
+        section_header(
+            "Detected Anomalies",
+            "Worst first — vessel IMO, type of flag, location and reason (all MODELED)",
+        )
+
+        headers = ["Vessel", "IMO", "Flag", "Type", "Severity", "Detail", "Reason"]
+        rows = []
+        for a in anomalies[:25]:
+            sev_color = (
+                C_LOW if a.severity == "CRITICAL"
+                else (C_MOD if a.severity == "HIGH" else C_ACCENT)
+            )
+            kind_label = "Coverage Gap" if a.kind == "GAP" else "Teleport (spoof)"
+            if a.kind == "GAP":
+                detail = f"{a.gap_duration_hours:.0f}h · {a.zone_name}"
+            else:
+                detail = f"{a.implied_speed_kts:.0f} kts (max {a.max_speed_kts:.0f})"
+            rows.append([
+                _sans(a.vessel_name or "—", color=C_TEXT, weight=600),
+                _mono(a.imo or "—", color=C_TEXT2),
+                _sans(a.flag or "—"),
+                _sans(kind_label, color=C_TEXT, weight=600),
+                _sans(a.severity, color=sev_color, weight=700),
+                _mono(detail, color=C_TEXT2),
+                _sans(a.reason),
+            ])
+        wsj_market_table(headers, rows)
+
+        # Best-effort alert emission for the worst anomalies — never breaks the tab.
+        try:
+            from engine.alert_engine_v2 import check_ais_anomaly_alerts, save_alerts
+
+            ais_alerts = check_ais_anomaly_alerts(max_alerts=5)
+            if ais_alerts:
+                save_alerts(ais_alerts)
+        except Exception:
+            logger.debug("AIS anomaly alert emission skipped", exc_info=True)
+
+        st.markdown(source_footer([
+            {"name": "Modeled Voyage Fleet (synthetic)",        "kind": "modeled", "quality": "demo"},
+            {"name": "Great-circle kinematics + speed bands",   "kind": "modeled", "quality": "demo"},
+            {"name": "Maritime chokepoint geofences (real coords)", "kind": "modeled", "quality": "demo"},
+        ]), unsafe_allow_html=True)
+    except Exception:
+        logger.exception("AIS integrity section error")
+        st.error("AIS integrity section unavailable.")
 
 
 # ---------------------------------------------------------------------------
@@ -940,12 +1141,23 @@ def render(port_results=None, insights=None, *args, **kwargs) -> None:
         try:
             page_header(
                 title="Regulatory Compliance & Sanctions Intelligence",
-                subtitle="Live sanctions screening · IMO regulatory calendar · CII tracking · Dark fleet intelligence · PSC enforcement",
+                subtitle="Illustrative sanctions / IMO calendar / CII / dark-fleet / PSC reference dashboard — sample data, not a live screen",
                 badge_text="COMPLIANCE",
                 badge_color=C_ACCENT,
             )
         except Exception:
             logger.exception("Header render error")
+
+        try:
+            alert_banner(
+                "<b>ILLUSTRATIVE / SAMPLE</b> — this dashboard renders curated reference and "
+                "modeled example data (vessel counts, SDN/detention tables, CII ratings), not a "
+                "live sanctions or port-state-control screen. Do not use for real compliance "
+                "decisions. A live screening engine is a separate, future capability.",
+                level="warning",
+            )
+        except Exception:
+            logger.exception("Compliance illustrative banner render error")
 
         sections = [
             ("Compliance Dashboard",          _section_1_dashboard),
@@ -954,6 +1166,7 @@ def render(port_results=None, insights=None, *args, **kwargs) -> None:
             ("CII Tracker",                   _section_4_cii_tracker),
             ("Sanctions Evasion Patterns",    _section_5_evasion_patterns),
             ("Dark Fleet Tracker",            _section_6_dark_fleet),
+            ("AIS Integrity / Dark Activity", _section_9_ais_integrity),
             ("Port State Control",            _section_7_psc),
             ("Compliance Risk Score",         _section_8_risk_score),
         ]

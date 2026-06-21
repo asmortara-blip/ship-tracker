@@ -16,6 +16,94 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _no_fetch_provenance_writes(monkeypatch):
+    """Disable the per-fetch provenance ledger (rec R003/R097) for every test so
+    a cache fetch in a non-DB-isolated test never writes to the real DB. Tests
+    that exercise the ledger re-enable it explicitly (with an isolated DB)."""
+    try:
+        import state.fetch_ledger as _fl
+        monkeypatch.setattr(_fl, "RECORDING_ENABLED", False, raising=False)
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _gdelt_offline_by_default(monkeypatch, tmp_path):
+    """No test makes a REAL GDELT call OR reads the on-disk GDELT cache. The R014
+    chokepoint-risk job is wired _run_always into the scheduler main() loop, so
+    any test that runs main() would otherwise fire 9 rate-limited (1 req/5s) live
+    GDELT fetches — slow enough to trip the per-test timeout AND, on success (or
+    from a cache a prior real run populated), escalate + mutate the process-global
+    CHOKEPOINTS registry, leaking risk levels into later tests. Neutralize BOTH
+    the live ``requests.get`` path AND the cache dir, so an un-injected fetch
+    reports honestly ``unavailable`` (a no-op overlay). The feed's own tests
+    inject ``http_get`` / set their own ``_CACHE_DIR``, and the job-wiring tests
+    monkeypatch ``fetch_chokepoint_events``, so all of them override this."""
+    try:
+        import data.gdelt_feed as _gf
+
+        class _NoNet:
+            @staticmethod
+            def get(*_a, **_k):
+                raise ConnectionError("GDELT network disabled in tests")
+
+        monkeypatch.setattr(_gf, "requests", _NoNet, raising=False)
+        monkeypatch.setattr(_gf, "_CACHE_DIR", tmp_path / "gdelt_cache",
+                            raising=False)
+        # The courtesy inter-request delay only fires on the real (http_get=None)
+        # path — i.e. exactly the scheduler main() path a test exercises. Zero it
+        # so a main()-running test doesn't sleep 9×5s before each fetch fails.
+        monkeypatch.setattr(_gf, "_INTER_REQUEST_DELAY", 0, raising=False)
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _live_feeds_offline_by_default(monkeypatch, tmp_path):
+    """No test makes a REAL OFAC-sanctions or Open-Meteo-marine call OR reads the
+    on-disk cache. The Compliance / Geopolitical tab renders call fetch_ofac_sdn()
+    with http_get=None, so a tab-smoke on a cold cache would otherwise pull the
+    real ~8MB OFAC SDN list over the network (slow + flaky). Neutralize the live
+    ``requests`` path + cache dir for both new feeds; the feeds' own tests inject
+    ``http_get`` / set their own ``_CACHE_DIR`` so they override this. (Same R014
+    lesson as the GDELT fixture above.)"""
+    class _NoNet:
+        @staticmethod
+        def get(*_a, **_k):
+            raise ConnectionError("live feed network disabled in tests")
+
+    for mod_name, cache_sub in (("data.sanctions_feed", "sanctions_cache"),
+                                ("data.marine_weather_feed", "marine_cache"),
+                                ("data.portwatch_feed", "portwatch_cache")):
+        try:
+            mod = __import__(mod_name, fromlist=["_CACHE_DIR"])
+            monkeypatch.setattr(mod, "requests", _NoNet, raising=False)
+            monkeypatch.setattr(mod, "_CACHE_DIR", tmp_path / cache_sub,
+                                raising=False)
+        except Exception:
+            pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _deep_history_offline_by_default(monkeypatch):
+    """``worker.run_deep_history_cache_job`` fetches multi-year yfinance history
+    for the risk universe; neutralize it by default so NO test (especially the
+    scheduler main() pass) hits Yahoo. The ``deepen_stock_cache`` unit tests
+    capture the real function at import time (``_deepen_raw``) and are unaffected;
+    the scheduler job resolves the name at call time → gets this no-op."""
+    try:
+        import data.stock_feed as _sf
+        monkeypatch.setattr(_sf, "deepen_stock_cache", lambda *a, **k: {},
+                            raising=False)
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def block_network(monkeypatch):
     """Fail every outbound TCP connection instantly.

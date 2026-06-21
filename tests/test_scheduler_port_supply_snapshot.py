@@ -456,7 +456,9 @@ def test_integrity_wrapper_returns_ok_false_when_underlying_raises(
 def test_integrity_wrapper_flags_unhealthy_dir(
     isolate_snapshot_root, monkeypatch,
 ) -> None:
-    """Snapshot dir missing the regional file → ok=False, n_unhealthy>=1."""
+    """Snapshot dir missing the regional file → the sweep RAN (ok=True, so the
+    daily cadence advances — a read-only check can't repair the file, R011
+    review) but flags it unhealthy (all_healthy=False, n_unhealthy>=1)."""
     from processing.port_supply_history import save_snapshot
     from datetime import date as _date
 
@@ -464,7 +466,8 @@ def test_integrity_wrapper_flags_unhealthy_dir(
     today = _date.today()
     save_snapshot(snapshot_date=today, root=isolate_snapshot_root)
     out = sched.run_snapshot_integrity_check_job(since_days=14)
-    assert out["ok"] is False
+    assert out["ok"] is True            # the sweep completed → cadence advances
+    assert out["all_healthy"] is False  # but it DID find a problem
     assert out["n_unhealthy"] >= 1
     assert out["n_missing"] >= 1
 

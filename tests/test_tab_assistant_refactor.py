@@ -275,3 +275,48 @@ def test_message_html_escapes_user_text_not_assistant() -> None:
     assert "&lt;script&gt;" in user             # …escaped
     asst = _message_html("assistant", "<b>Bold</b>", "12:00")
     assert "<b>Bold</b>" in asst                # assistant markup preserved
+
+
+# ── 8. Honesty: no fabricated vendor sources or invented figures ───────────
+
+_ASSISTANT_QUESTIONS = [
+    "What are Asia-Europe freight rates?", "How is the BDI?", "Tell me about ZIM",
+    "carrier schedule reliability", "Q2 2026 outlook", "Red Sea impact",
+    "Panama Canal drought", "which shipping stock has a LONG signal", "anything else",
+]
+
+
+def test_every_answer_carries_the_honest_footer() -> None:
+    """Every assistant answer must carry the modeled/not-advice footer."""
+    from ui.tab_assistant import _build_response, _HONEST_FOOTER
+    for q in _ASSISTANT_QUESTIONS:
+        ans, followups = _build_response(q, {}, {}, {}, [], [], [])
+        assert _HONEST_FOOTER in ans, f"honest footer missing for: {q!r}"
+        assert len(followups) == 3
+
+
+def test_no_fabricated_vendor_sources_or_numbers_on_empty_data() -> None:
+    """With no real data the assistant must NOT invent vendor-attributed
+    'Source:' footers or hardcoded current figures (the R001 honesty fix)."""
+    from ui.tab_assistant import _build_response
+    # fabricated vendor-source attributions that used to be stamped on answers
+    banned = [
+        "Source: Clarksons", "Source: ZIM filings", "Bloomberg consensus",
+        "Source: Sea-Intelligence", "Source: Drewry", "Source: Baltic Exchange",
+        "Source: Panama Canal Authority", "Drewry consensus",
+        "58.2% on-time", "~1,850", "~$17.50",
+    ]
+    for q in _ASSISTANT_QUESTIONS:
+        ans, _ = _build_response(q, {}, {}, {}, [], [], [])
+        leaked = [b for b in banned if b in ans]
+        assert not leaked, f"fabrication leaked for {q!r}: {leaked}"
+
+
+def test_real_values_surface_when_data_is_present() -> None:
+    """When real freight/macro data is supplied, the assistant reports it
+    (rather than a fabricated fallback)."""
+    from ui.tab_assistant import _build_response
+    ans_bdi, _ = _build_response("How is the BDI?", {}, {"BDI": 2150}, {}, [], [], [])
+    assert "2,150" in ans_bdi
+    ans_fr, _ = _build_response("Asia-Europe freight rates", {"Asia-Europe": 3200}, {}, {}, [], [], [])
+    assert "3,200" in ans_fr

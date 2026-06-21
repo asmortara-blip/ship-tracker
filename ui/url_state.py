@@ -19,6 +19,11 @@ from typing import Iterable, Mapping, Optional
 # The query-string key that carries the active section, e.g. ``?section=markets``.
 SECTION_QUERY_KEY = "section"
 
+# The query-string key that carries the active instrument/entity for a
+# deep-linkable tearsheet, e.g. ``?entity=ZIM``. Mirrors SECTION_QUERY_KEY:
+# the page survives a refresh + the back-button and is shareable by URL.
+ENTITY_QUERY_KEY = "entity"
+
 
 def _coerce_scalar(raw: object) -> Optional[str]:
     """Unwrap a query-param value to a single trimmed string.
@@ -63,3 +68,40 @@ def resolve_active_section(
 def section_url_query(section: str) -> dict[str, str]:
     """The query-param dict that addresses ``section`` (for building share links)."""
     return {SECTION_QUERY_KEY: str(section)}
+
+
+def resolve_active_entity(
+    query_params: Mapping[str, object] | None,
+    valid_entities: Iterable[str] | None = None,
+    *,
+    default: str = "",
+) -> str:
+    """Pick the active instrument/entity (ticker) to show on a fresh load.
+
+    Returns the uppercased ``?entity=`` value when present, validating it
+    against ``valid_entities`` when that set is supplied (an unknown ticker
+    falls back to ``default``). When ``valid_entities`` is ``None`` the value
+    is accepted as-is — the consuming tab still resolves it against its own
+    universe. Robust to a missing/empty mapping and a list-valued param —
+    never raises. Returns ``default`` ("" by default) when nothing addressable
+    is present.
+    """
+    if not query_params:
+        return default
+    key = _coerce_scalar(query_params.get(ENTITY_QUERY_KEY))
+    if key is None:
+        return default
+    key = key.upper()
+    if valid_entities is None:
+        return key
+    valid = {str(e).upper() for e in valid_entities}
+    return key if key in valid else default
+
+
+def entity_url_query(entity: str) -> dict[str, str]:
+    """The query-param dict that addresses ``entity`` (for building share links).
+
+    The ticker is uppercased + trimmed so a link is URL-stable regardless of
+    how the caller cased it.
+    """
+    return {ENTITY_QUERY_KEY: str(entity).strip().upper()}

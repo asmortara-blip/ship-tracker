@@ -396,6 +396,25 @@ def run_daily_briefing_job(
                 error_msg="save_report returned None",
             )
 
+        # Audit-log the scheduled fire. ``save_report`` already emitted a
+        # ``generate_report`` event for the persisted row; this companion
+        # event marks that the briefing was produced by the SCHEDULER (not
+        # an interactive user), so a security review can tell an automated
+        # daily fire from a hand-triggered report. The scheduler runs
+        # outside any Streamlit session, so the user is the empty/system
+        # id (``""``) — recorded honestly rather than spoofing a person.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "scheduled_report_fire",
+                entity_type="report",
+                entity_id=meta.report_id,
+                detail={"pushed_to_channels": bool(push_to_channels)},
+                user_id="",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Optional outbound delivery — best-effort, never flips success
         if push_to_channels:
             try:
@@ -450,6 +469,150 @@ _BRIEFING_TLDR_DIR: Path = (
 
 
 @_track_run
+def run_signal_ledger_freeze_job(data_bundle: dict) -> dict:
+    """Freeze today's EquityIdeas into the point-in-time signal ledger (R004).
+
+    Rebuilds the idea set from the same daily bundle the briefing uses
+    (compute_shipping_stress -> build_exposure_matrix -> score_equity_ideas) and
+    freezes each idea AS ISSUED via ``state.signal_ledger.freeze_ideas``.
+    Idempotent per (ticker, day, direction) — a re-run inserts nothing. Never
+    raises: a failure here must not touch the briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.exposure_matrix import build_exposure_matrix
+        from processing.disruption_cascade import score_equity_ideas
+        from state.signal_ledger import freeze_ideas
+
+        stock_data = bundle.get("stock_data", {})
+        stress = compute_shipping_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("port_results", []), bundle.get("route_results", []),
+        )
+        exposure = build_exposure_matrix(stock_data)
+        ideas = score_equity_ideas(
+            stress, exposure, stock_data, bundle.get("insights", []),
+        )
+        frozen = freeze_ideas(ideas, stock_data=stock_data)
+        logger.info(
+            f"run_signal_ledger_freeze_job: froze {frozen} new idea(s) "
+            f"of {len(ideas or [])}"
+        )
+        return {"frozen": int(frozen), "ideas": len(ideas or [])}
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"run_signal_ledger_freeze_job failed: {exc}")
+        return {"frozen": 0, "ideas": 0, "error": str(exc)}
+
+
+def run_signal_drawdown_job(data_bundle: dict) -> dict:
+    """Mark the signal ledger forward and fire the per-tier drawdown
+    kill-switch (B2). Rides on the same daily bundle as the freeze job, so it
+    runs right after the freeze with TODAY's closes already in hand.
+
+    Thin wrapper around
+    ``engine.signal_drawdown_alerts.check_and_alert_drawdown`` that adds
+    logging and shields the caller from any exception. The underlying alerter
+    already cooldown-gates each tier (24h) so a chronically-underwater tier
+    stays quiet until tomorrow regardless of cadence.
+
+    Returns the count dict shaped like the other alerters: ``{"checked": N,
+    "stand_down": N, "alerted": N, "skipped_cooldown": N}`` (all zeros on a
+    top-level exception). NEVER raises — a check failure must never block the
+    briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from engine.signal_drawdown_alerts import check_and_alert_drawdown
+
+        counts = check_and_alert_drawdown(bundle.get("stock_data", {}))
+        logger.info(
+            f"run_signal_drawdown_job: checked={counts.get('checked', 0)} "
+            f"stand_down={counts.get('stand_down', 0)} "
+            f"alerted={counts.get('alerted', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)}"
+        )
+        return counts
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"run_signal_drawdown_job: failed: {exc}")
+        return {"checked": 0, "stand_down": 0, "alerted": 0, "skipped_cooldown": 0}
+
+
+def run_forecast_logging_job(data_bundle: dict, *, root=None) -> dict:
+    """Append today's route stress forecasts + realized actuals, then pair (R046).
+
+    The predicted-vs-actual tracker only PAIRS + summarizes; the emission side was
+    left as this scheduler wiring step. Each daily pass:
+
+      1. rebuilds the SSI + ``forecast_all_stress`` from the same bundle the
+         briefing uses, and ``log_forecast``s each route's 7d/30d stress
+         projection WITH its R023 interval (``forecast_sigma``) and the
+         forecast-time level as the persistence ``baseline_value`` (so R029's
+         CRPS/PIT/coverage/skill have something to score);
+      2. ``log_actual``s today's realized stress level per route — which is the
+         actual a forecast made N days ago (targeting today) pairs against;
+      3. pairs + summarizes via ``run_forecast_log_job``.
+
+    Idempotent-friendly: the pair layer dedupes on (lane, date, horizon) /
+    (lane, date), so a re-run the same day does not double-count. Never raises —
+    a logging failure must not touch the briefing flow it rides on.
+    """
+    bundle = data_bundle or {}
+    try:
+        from processing.shipping_stress_index import compute_shipping_stress
+        from processing.disruption_forecast import forecast_all_stress
+        from processing.forecast_accuracy_tracker import (
+            ActualRecord, ForecastRecord, log_actual, log_forecast,
+            run_forecast_log_job, should_log_forecast_today,
+        )
+
+        if not should_log_forecast_today():
+            return {"ok": True, "skipped": True, "forecasts": 0, "actuals": 0}
+
+        stress = compute_shipping_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("port_results", []), bundle.get("route_results", []),
+        )
+        forecasts = forecast_all_stress(
+            bundle.get("freight_data", {}), bundle.get("macro_data", {}),
+            bundle.get("route_results", []), stress_report=stress,
+        )
+        today = datetime.now(timezone.utc).date().isoformat()
+        n_fc = n_act = 0
+        for f in forecasts or []:
+            rid = str(getattr(f, "route_id", "") or "")
+            if not rid:
+                continue
+            cur = float(getattr(f, "current_stress", 0.0) or 0.0)
+            sigma = float(getattr(f, "forecast_sigma", 0.0) or 0.0)
+            for horizon, value, h_sigma in (
+                (30, float(getattr(f, "stress_30d", cur) or 0.0), sigma),
+                (7, float(getattr(f, "stress_7d", cur) or 0.0),
+                 sigma * (7.0 / 30.0) ** 0.5),
+            ):
+                log_forecast(ForecastRecord(
+                    forecast_date_iso=today, horizon_days=horizon,
+                    predicted_value=value, lane_id=rid,
+                    predicted_sigma=h_sigma, baseline_value=cur,
+                ), root=root)
+                n_fc += 1
+            log_actual(ActualRecord(
+                actual_date_iso=today, actual_value=cur, lane_id=rid,
+            ), root=root)
+            n_act += 1
+
+        pair = run_forecast_log_job(root=root)
+        logger.info(
+            f"run_forecast_logging_job: logged {n_fc} forecast(s) + {n_act} "
+            f"actual(s); {pair.get('n_pairs', 0)} pair(s) scored"
+        )
+        return {"ok": True, "forecasts": n_fc, "actuals": n_act,
+                "n_pairs": int(pair.get("n_pairs", 0))}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"run_forecast_logging_job: failed: {exc}")
+        return {"ok": False, "forecasts": 0, "actuals": 0, "error": str(exc)}
+
+
 def run_briefing_tldr_job(data_bundle: dict) -> dict:
     """Generate the day's one-paragraph briefing TLDR once and persist
     ready-to-send artifacts (gated by should_send). Never raises.
@@ -678,6 +841,135 @@ def run_health_ping_job() -> list:
         return []
 
 
+def run_canal_sync_job() -> dict:
+    """Fetch live canal-transit stats and overlay them onto the chokepoint
+    registry (R007), so SSI computed this worker pass reads live Suez/Panama
+    state instead of the hardcoded baseline (chokepoint is the top SSI weight).
+
+    Real-only: a synthetic / modeled canal fallback leaves the baseline
+    untouched (honesty — a modeled fallback is never presented as observed
+    transit). Never raises — a canal-feed failure must not block the briefing
+    pass. Returns the per-canal realness marker.
+    """
+    try:
+        from data.canal_feed import fetch_panama_stats, fetch_suez_stats
+        from processing.canal_chokepoint_sync import apply_live_canal_state
+
+        stats = []
+        for _fetch in (fetch_suez_stats, fetch_panama_stats):
+            try:
+                stats.append(_fetch())
+            except Exception as exc:
+                logger.warning(f"run_canal_sync_job: canal fetch failed: {exc}")
+        realness = apply_live_canal_state(stats)
+        live = sorted(c for c, m in realness.items() if m.get("realness") == "live")
+        logger.info(
+            f"run_canal_sync_job: {len(live)} canal(s) live "
+            f"({', '.join(live) or 'none — all modeled/dark, baseline kept'})"
+        )
+        return realness
+    except Exception as exc:
+        logger.warning(f"run_canal_sync_job: failed: {exc}")
+        return {}
+
+
+def run_gdelt_chokepoint_job(*, http_get=None) -> dict:
+    """Fetch real GDELT geo-events near each chokepoint and ESCALATE the registry
+    risk_level from them (R014), so SSI computed this pass reads live chokepoint
+    risk instead of only the hardcoded baseline (chokepoint is the top SSI weight,
+    ~0.29, and was previously hand-edited constants that could never move).
+
+    Real-only: GDELT signal can only RAISE a node above its modeled baseline; no
+    signal / offline leaves the baseline untouched (honesty — absence is never
+    escalation, a modeled fallback is never presented as observed conflict).
+
+    ``ok`` reflects that the SWEEP ran (fetch attempted + overlay applied), NOT
+    whether GDELT was reachable — an unavailable/rate-limited feed is a data
+    condition, not a job failure (same contract as the snapshot integrity check),
+    so we don't hammer GDELT's host-side rate limit. The feed status is in
+    ``realness`` ("live"/"empty"/"unavailable"). Never raises. ``http_get`` is
+    injectable for offline tests.
+    """
+    try:
+        from data.gdelt_feed import fetch_chokepoint_events
+        from processing.chokepoint_analyzer import (
+            CHOKEPOINTS,
+            apply_live_chokepoint_risk,
+        )
+
+        events, realness = fetch_chokepoint_events(
+            list(CHOKEPOINTS.items()), http_get=http_get
+        )
+        marker = apply_live_chokepoint_risk(gdelt_events=events)
+        live = sorted(k for k, m in marker.items() if m.get("realness") == "live")
+        logger.info(
+            f"run_gdelt_chokepoint_job: feed={realness}, {len(events)} event(s), "
+            f"{len(live)} chokepoint(s) escalated "
+            f"({', '.join(live) or 'none — baseline kept'})"
+        )
+        return {"ok": True, "realness": realness,
+                "n_events": len(events), "live": live}
+    except Exception as exc:
+        logger.warning(f"run_gdelt_chokepoint_job: failed: {exc}")
+        return {"ok": False, "realness": "unavailable", "n_events": 0, "live": []}
+
+
+def run_portwatch_transit_job() -> dict:
+    """Escalate the NON-canal straits' risk_level from the REAL IMF PortWatch
+    transit feed (S1), so SSI computed this pass reads live strait risk instead
+    of only the hardcoded baseline. Mirrors run_gdelt_chokepoint_job's contract.
+
+    Escalate-only + real-only: a transit COLLAPSE raises a strait above its
+    baseline; an unavailable/empty feed leaves the baseline untouched (silence is
+    never a signal), and the escalation merges against the PRISTINE baseline so a
+    cleared collapse returns the node to baseline. Suez/Panama are owned by the
+    canal overlay and skipped. Never raises.
+    """
+    try:
+        from data.portwatch_feed import fetch_chokepoint_transits
+        from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+
+        transits = fetch_chokepoint_transits()
+        marker = apply_live_chokepoint_transits(transits)
+        live = sorted(marker.keys())
+        logger.info(
+            f"run_portwatch_transit_job: feed={transits.basis}, "
+            f"{len(transits.rows)} row(s), {len(live)} strait(s) observed "
+            f"({', '.join(live) or 'none — baseline kept'})"
+        )
+        return {"ok": True, "basis": transits.basis, "live": live}
+    except Exception as exc:
+        logger.warning(f"run_portwatch_transit_job: failed: {exc}")
+        return {"ok": False, "basis": "unavailable", "live": []}
+
+
+def run_deep_history_cache_job() -> dict:
+    """Deepen the risk-universe price cache to multi-year history so the live VaR
+    coverage backtest + book risk run on deep REAL data in production — the EWMA
+    VaR method was validated at this depth (historical is rejected on it).
+
+    Gentle (courtesy sleeps between fetches) + offline-safe: a throttled / empty
+    feed is a DATA condition, not a job failure (``ok`` stays True so we don't
+    hammer yfinance — the daily cadence simply retries next pass; a throttled
+    ticker keeps its existing cache, never overwritten with silence). Never
+    raises.
+    """
+    try:
+        from data.stock_feed import deepen_stock_cache
+        from processing.var_coverage_backtest import _DEFAULT_TICKERS
+
+        res = deepen_stock_cache(list(_DEFAULT_TICKERS), lookback_days=1825)
+        written = sorted(k for k, v in res.items() if v == "written")
+        logger.info(
+            f"run_deep_history_cache_job: deepened {len(written)}/{len(res)} "
+            f"({', '.join(written) or 'none — throttled/offline, existing cache kept'})"
+        )
+        return {"ok": True, "written": written, "n_written": len(written)}
+    except Exception as exc:
+        logger.warning(f"run_deep_history_cache_job: failed: {exc}")
+        return {"ok": False, "written": [], "n_written": 0}
+
+
 @_track_run
 def run_health_prune_job(retention_days: int = 30) -> int:
     """Prune ``data_source_health`` rows older than ``retention_days``.
@@ -775,6 +1067,44 @@ def run_perf_budget_check_job() -> dict:
     except Exception as exc:
         logger.warning(f"run_perf_budget_check_job: failed: {exc}")
         return {"checked": 0, "breached": 0, "alerted": 0, "skipped_cooldown": 0}
+
+
+@_track_run
+def run_worker_deadman_job() -> dict:
+    """Self-monitor: fire alerts when a critical scheduler job goes stale or
+    starts failing (R117).
+
+    Thin wrapper around ``engine.worker_deadman.check_worker_health_and_fire``
+    that adds logging and shields the caller from any exception. Reads the
+    per-job run telemetry that ``_track_run`` already records to
+    ``state.worker_runs`` and alerts when a *critical* daily job has not run
+    inside its cadence window (CRITICAL "stale") or is repeatedly erroring
+    (HIGH "failing").
+
+    Designed to run on EVERY pass (like the source-health + escalation
+    self-monitors): the underlying orchestrator self-gates each job with a
+    6h kv_state cooldown, so a chronically-stale job stays quiet between
+    fires regardless of cadence. The orchestrator already swallows
+    per-finding failures internally — this wrapper is belt-and-braces: even
+    if it raises, the worker continues. Returns the count dict
+    ``{"fired": N, "skipped_cooldown": N, "errored": N}`` (or all zeros on a
+    top-level exception).
+
+    Never raises — a deadman that crashes the worker is worse than useless.
+    """
+    try:
+        from engine.worker_deadman import check_worker_health_and_fire
+
+        counts = check_worker_health_and_fire()
+        logger.info(
+            f"run_worker_deadman_job: fired={counts.get('fired', 0)} "
+            f"skipped_cooldown={counts.get('skipped_cooldown', 0)} "
+            f"errored={counts.get('errored', 0)}"
+        )
+        return counts
+    except Exception as exc:
+        logger.warning(f"run_worker_deadman_job: failed: {exc}")
+        return {"fired": 0, "skipped_cooldown": 0, "errored": 0}
 
 
 @_track_run
@@ -1205,15 +1535,23 @@ def run_snapshot_integrity_check_job(
             "n_missing": 0, "n_corrupted": 0, "oldest_problem_date": "",
         }
 
+    all_healthy = (s["n_dates_checked"] == s["n_ok"])
     counts = {
-        "ok":                   (s["n_dates_checked"] == s["n_ok"]),
+        # ``ok`` = the integrity SWEEP completed (the job did its work), so under
+        # the R011 stamp-on-success cadence it advances the DAILY stamp even when
+        # it FINDS corruption — re-running a read-only check can't repair a
+        # corrupt/missing file, so retrying every 5-min pass would just hammer it
+        # (R011 review). The health verdict is ``all_healthy``; the exception
+        # path above returns ok=False (the sweep itself failed → genuinely retry).
+        "ok":                   True,
+        "all_healthy":          all_healthy,
         "n_checked":            int(s["n_dates_checked"]),
         "n_unhealthy":          int(s["n_dates_checked"] - s["n_ok"]),
         "n_missing":            int(s["n_missing"]),
         "n_corrupted":          int(s["n_corrupted"]),
         "oldest_problem_date":  s["oldest_problem_date"] or "",
     }
-    if counts["ok"]:
+    if all_healthy:
         logger.info(
             f"run_snapshot_integrity_check_job: "
             f"{counts['n_checked']}/{counts['n_checked']} healthy"
@@ -1862,12 +2200,59 @@ def _job_due(
     force: bool = False,
 ) -> bool:
     """True iff job ``name`` is due (>= ``interval_seconds`` since its last
-    run, or never run) — and STAMP the run time when returning True.
+    SUCCESSFUL run, or never run). READ-ONLY — it never writes the stamp.
+
+    R011: the cadence stamp is advanced by :func:`stamp_run`, called ONLY
+    after a job actually succeeds (see ``_run_gated`` and ``main``'s briefing
+    block). Splitting the read (here) from the write (``stamp_run``) is the
+    whole fix: a job that was due but then FAILED no longer advances its
+    cadence, so the next pass re-attempts it instead of waiting a full window.
 
     Backed by a kv_state row ``scheduler:lastrun:<name>``. ``force`` bypasses
-    the gate (still stamps). Fail-OPEN: on ANY error this returns True — better
+    the gate (always due). Fail-OPEN: on ANY error this returns True — better
     to run a heavy job an extra time than to silently stop running it because
     the gate's own bookkeeping broke.
+    """
+    if force:
+        return True
+    now_dt = now or datetime.now(timezone.utc)
+    key = _JOB_LASTRUN_KEY.format(name=name)
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key = ?", (key,),
+        ).fetchone()
+        if row is not None:
+            try:
+                last = datetime.fromisoformat(row["value"])
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                last = None
+            if last is not None and (
+                now_dt - last
+            ).total_seconds() < interval_seconds:
+                return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — gate must never stop the worker
+        logger.warning(
+            f"_job_due: gate check failed for {name!r}, running anyway: {exc}"
+        )
+        return True
+
+
+def stamp_run(name: str, *, now: Optional[datetime] = None) -> None:
+    """Advance job ``name``'s cadence stamp to ``now`` in kv_state (R011).
+
+    The INSERT-OR-REPLACE that used to live inside the due-CHECK. Call this
+    ONLY after the job has actually SUCCEEDED, so a failed/skipped job does
+    NOT advance its cadence and gets re-attempted on the next pass.
+
+    Idempotent and NEVER raises — a stamp failure must never take the worker
+    down (the job already ran; the worst case of a missed stamp is that the
+    job re-runs next pass, which is the same fail-open posture as ``_job_due``).
     """
     now_dt = now or datetime.now(timezone.utc)
     key = _JOB_LASTRUN_KEY.format(name=name)
@@ -1875,32 +2260,39 @@ def _job_due(
         from state.db import get_connection
 
         conn = get_connection()
-        if not force:
-            row = conn.execute(
-                "SELECT value FROM kv_state WHERE key = ?", (key,),
-            ).fetchone()
-            if row is not None:
-                try:
-                    last = datetime.fromisoformat(row["value"])
-                    if last.tzinfo is None:
-                        last = last.replace(tzinfo=timezone.utc)
-                except (TypeError, ValueError):
-                    last = None
-                if last is not None and (
-                    now_dt - last
-                ).total_seconds() < interval_seconds:
-                    return False
         conn.execute(
             "INSERT OR REPLACE INTO kv_state (key, value, updated_at) "
             "VALUES (?, ?, ?)",
             (key, now_dt.isoformat(), now_dt.isoformat()),
         )
-        return True
-    except Exception as exc:  # noqa: BLE001 — gate must never stop the worker
+    except Exception as exc:  # noqa: BLE001 — stamp must never stop the worker
         logger.warning(
-            f"_job_due: gate check failed for {name!r}, running anyway: {exc}"
+            f"stamp_run: failed to stamp {name!r} cadence: {exc}"
         )
-        return True
+
+
+def _job_succeeded(result: Any) -> bool:
+    """Decide whether a job's return value signals success (R011).
+
+    Honors an explicit flag when the job exposes one, else treats a
+    no-exception return as success:
+
+      * a dataclass result with a ``success`` attribute (e.g.
+        ``ReportJobResult``) → that flag;
+      * a dict carrying an ``ok`` key (e.g. the snapshot jobs) → ``bool(ok)``;
+      * everything else — count dicts without ``ok``
+        (``{"fired": N, ...}``), bare ints (the pruners), lists
+        (``run_health_ping_job``), ``None`` (fire-and-forget) — has no
+        explicit failure signal, so a clean return counts as success.
+
+    A raised exception never reaches here: ``_run_gated`` only calls this on
+    the no-exception path and stamps nothing when the job raised.
+    """
+    if hasattr(result, "success"):
+        return bool(getattr(result, "success"))
+    if isinstance(result, dict) and "ok" in result:
+        return bool(result["ok"])
+    return True
 
 
 def _run_gated(
@@ -1914,15 +2306,31 @@ def _run_gated(
 ) -> None:
     """Run heavy job ``fn`` iff ``_job_due`` says so; swallow + log any error.
 
+    R011: the cadence stamp advances ONLY when ``fn`` actually succeeds — no
+    exception AND (if it returns an explicit ``success``/``ok`` flag) that flag
+    is truthy. A job that was due but then FAILED leaves its stamp untouched,
+    so the next pass re-attempts it instead of waiting a full cadence window.
+    ``force`` still runs the job; it only stamps on success.
+
     Skipping (within-interval) is logged at DEBUG; a job exception is logged
-    at WARNING. The job itself already no-raises — this is belt-and-braces."""
+    at WARNING. The job itself already no-raises — the try/except is
+    belt-and-braces (and, post-R011, the reason a raise leaves the stamp
+    un-advanced for a retry)."""
     if not _job_due(name, interval_seconds, now=now, force=force):
         logger.debug(f"main: {label or name} skipped (within cadence)")
         return
     try:
-        fn()
+        result = fn()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"main: {label or name} step failed: {exc}")
+        return  # do NOT stamp — the job raised, so it stays due for a retry
+    if _job_succeeded(result):
+        stamp_run(name, now=now)
+    else:
+        logger.warning(
+            f"main: {label or name} reported failure — cadence not advanced, "
+            f"will retry next pass"
+        )
 
 
 def _run_always(label: str, fn: Callable) -> None:
@@ -1968,12 +2376,51 @@ def main(argv: Optional[list] = None) -> int:
     result = None
     if _job_due("run_daily_briefing_job", _DAILY_SECONDS, now=now, force=force):
         bundle = load_data_bundle()
+        # R007: refresh the live canal→chokepoint overlay BEFORE the jobs below
+        # compute the SSI, so they read live Suez/Panama transit (real-only)
+        # rather than the hardcoded baseline. Shielded — never blocks briefing.
+        _run_always("canal→chokepoint sync", lambda: run_canal_sync_job())
+        # R014: escalate chokepoint risk from real GDELT geo-events too (real-only,
+        # 6h-cached so this is cheap most passes). Applied BEFORE the briefing
+        # computes SSI, alongside the canal overlay. Shielded — never blocks.
+        _run_always("gdelt→chokepoint risk", lambda: run_gdelt_chokepoint_job())
+        # S1: escalate the non-canal straits from real PortWatch transit collapses
+        # too (real-only, escalate-only, 6h-cached). Applied alongside the canal +
+        # gdelt overlays BEFORE the briefing computes SSI. Shielded — never blocks.
+        _run_always("portwatch→chokepoint transit", lambda: run_portwatch_transit_job())
         result = run_daily_briefing_job(bundle, push_to_channels=args.push)
+        # R011: advance the daily cadence stamp ONLY when the briefing actually
+        # succeeded. A failed build leaves the stamp un-advanced so the next
+        # fast pass re-attempts it instead of waiting a full day. The sibling
+        # _run_always jobs below ride on this same gate, so they re-run too.
+        if result.success:
+            stamp_run("run_daily_briefing_job", now=now)
+        else:
+            logger.warning(
+                "main: daily briefing failed — cadence not advanced, "
+                "will retry next pass"
+            )
         print(json.dumps(asdict(result), indent=2, default=str))
         # Daily briefing TLDR — primes the day-cache the UI reads + persists
         # ready-to-send artifacts, reusing the freshly-loaded bundle. A TLDR
         # failure must never touch the report.
         _run_always("briefing TLDR", lambda: run_briefing_tldr_job(bundle))
+        # Freeze today's EquityIdeas into the point-in-time signal ledger
+        # (R004) — reuse the freshly-loaded bundle; idempotent per day so it's
+        # safe to run on every daily-gated briefing pass.
+        _run_always("signal ledger freeze",
+                    lambda: run_signal_ledger_freeze_job(bundle))
+        # Per-tier drawdown kill-switch (B2) — mark the freshly-frozen ledger
+        # forward on TODAY's closes and fire a SIGNAL_DRAWDOWN alert for any
+        # conviction tier whose track record cratered. Runs right after the
+        # freeze; the alerter self-gates each tier with a 24h cooldown.
+        _run_always("signal drawdown kill-switch",
+                    lambda: run_signal_drawdown_job(bundle))
+        # Predicted-vs-actual forecast logging (R046) — emit today's route stress
+        # forecasts (with R023 intervals) + realized actuals, then pair, so the
+        # R029 calibration scores accrue real history. Reuses the daily bundle.
+        _run_always("forecast logging",
+                    lambda: run_forecast_logging_job(bundle))
     else:
         print(json.dumps(
             {"briefing": "skipped", "reason": "ran within the daily interval"}
@@ -2004,6 +2451,12 @@ def main(argv: Optional[list] = None) -> int:
     _run_gated("run_anomaly_detection_job", _SIX_HOURLY_SECONDS, run_anomaly_detection_job,
                now=now, force=force, label="anomaly detection")
 
+    # SLA self-monitor — EVERY pass: alert if a critical scheduler job has
+    # gone stale (missed its cadence window) or is repeatedly failing. The
+    # orchestrator self-gates each job with a 6h kv_state cooldown, so this
+    # is safe to run unconditionally alongside the other every-pass monitors.
+    _run_always("worker deadman", run_worker_deadman_job)
+
     # SLA jobs — EVERY pass: an unacked CRITICAL escalates, and a transient
     # delivery failure retries, within minutes. These are the reason main()
     # must be safe to invoke every ~5 minutes.
@@ -2033,6 +2486,11 @@ def main(argv: Optional[list] = None) -> int:
     # company-risk history → integrity sweep → GC every tree), in dependency
     # order. Each snapshot tree's GC runs AFTER its save so the same tick
     # never collects today's write.
+    # Deepen the risk-universe price cache to multi-year history (daily cadence;
+    # gentle + throttle-safe) so the live VaR backtest + book risk run on deep
+    # REAL data — the depth the EWMA VaR was validated on.
+    _run_gated("run_deep_history_cache_job", _DAILY_SECONDS, run_deep_history_cache_job,
+               now=now, force=force, label="deep history cache")
     _run_gated("run_port_supply_snapshot_job", _DAILY_SECONDS, run_port_supply_snapshot_job,
                now=now, force=force, label="port supply snapshot")
     _run_gated("run_multi_container_snapshot_job", _DAILY_SECONDS, run_multi_container_snapshot_job,

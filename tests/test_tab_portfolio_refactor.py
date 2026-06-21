@@ -248,3 +248,31 @@ def test_risk_return_scatter_has_market_beta_reference_line() -> None:
     annotations = [a.text for a in (fig.layout.annotations or []) if a.text]
     assert any("Market" in a for a in annotations), \
         "expected 'Market β' annotation on the Beta=1 reference line"
+
+
+# ── R008: the risk panel must NOT fabricate (real VaR / BDI, not rng.normal) ──
+
+def test_risk_metrics_no_longer_fabricates_returns_or_bdi() -> None:
+    import inspect
+
+    import ui.tab_portfolio as tp
+    src = inspect.getsource(tp._render_risk_metrics)
+    # The whole rng.normal 252-day Monte-Carlo panel + the 0.6*port_ret synthetic
+    # BDI correlation are gone (mentions in the docstring don't count — those are
+    # prose, but np.random calls / the 0.6 factor are code).
+    assert "np.random.default_rng" not in src
+    assert "0.6 * port_ret" not in src
+    assert "Simulated daily P&L" not in src
+    # The panel now builds from the real returns panel + real macro.
+    assert "returns_panel" in src
+    assert "var_dollar" in src
+
+
+def test_book_cascade_section_exists_and_is_wired() -> None:
+    import inspect
+
+    import ui.tab_portfolio as tp
+    assert hasattr(tp, "_render_book_cascade")
+    render_src = inspect.getsource(tp.render)
+    assert "_render_book_cascade(" in render_src
+    assert "_render_risk_metrics(df, stock_data, macro_data)" in render_src

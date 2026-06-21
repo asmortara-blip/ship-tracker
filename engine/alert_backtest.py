@@ -75,6 +75,64 @@ class AlertBacktestReport:
     median_magnitude_ratio: float = 0.0
 
 
+@dataclass
+class ThresholdScore:
+    """One candidate threshold's re-scored performance for an alert_type.
+
+    A candidate threshold ``c`` means "only count fires whose predicted
+    move magnitude (|change_pct|) was at least ``c``" — i.e. what the
+    hit-rate would have been had the alert bar been raised to ``c``.
+
+    Fields:
+        threshold:   The candidate threshold value (a % move magnitude).
+        fire_count:  How many historical fires of this alert_type clear the
+                     candidate (``|predicted_change_pct| >= threshold``).
+        hit_count:   How many of those firing alerts were sign-hits.
+        hit_rate:    ``hit_count / fire_count`` (0.0 when fire_count == 0).
+    """
+    threshold: float
+    fire_count: int
+    hit_count: int
+    hit_rate: float
+
+
+@dataclass
+class ThresholdRecommendation:
+    """A recommended threshold for an alert_type, or an honest 'no rec'.
+
+    ``recommended`` is None when no candidate clears the min-fire-count
+    floor — we do NOT fabricate a recommendation from too-thin evidence
+    (see ``recommend_threshold``). In that case ``reason`` explains why
+    and the current_* fields are still populated where computable.
+
+    Fields:
+        alert_type:        The alert_type this recommendation is for.
+        recommended:       The recommended threshold, or None.
+        recommended_hit_rate:   Hit-rate at the recommended threshold.
+        recommended_fire_count: Fire-count at the recommended threshold.
+        current_threshold: The threshold currently in effect (from the
+                           override store), or None when no override exists.
+        current_hit_rate:  Hit-rate at the current threshold (the candidate
+                           nearest-at-or-below the current threshold), or
+                           None when not computable.
+        current_fire_count: Fire-count at the current threshold, or None.
+        min_fire_count:    The floor that was enforced.
+        reason:            Human-readable 'why' (or the insufficient-data
+                           explanation when recommended is None).
+        candidates:        The full swept grid, for display / audit.
+    """
+    alert_type: str
+    recommended: Optional[float]
+    recommended_hit_rate: float = 0.0
+    recommended_fire_count: int = 0
+    current_threshold: Optional[float] = None
+    current_hit_rate: Optional[float] = None
+    current_fire_count: Optional[int] = None
+    min_fire_count: int = 0
+    reason: str = ""
+    candidates: list[ThresholdScore] = field(default_factory=list)
+
+
 # ─── Internal helpers ──────────────────────────────────────────────────────
 
 def _parse_iso(s: str) -> Optional[datetime]:
@@ -303,6 +361,32 @@ def backtest_alerts(
                    AND   created_at <= (now - window_days)
         (the second condition ensures the realized window is in the past)
     """
+    outcomes, n_skipped = _collect_outcomes(
+        stock_data, freight_data, macro_data,
+        window_days=window_days, lookback_days=lookback_days,
+    )
+    if outcomes is None:
+        # _collect_outcomes signals a read failure with None.
+        return _empty_report()
+    return _aggregate(outcomes, n_skipped, window_days)
+
+
+def _collect_outcomes(
+    stock_data: dict,
+    freight_data: dict,
+    macro_data: dict,
+    *,
+    window_days: int = 7,
+    lookback_days: int = 90,
+) -> tuple[Optional[list[AlertOutcome]], int]:
+    """Pull the eligible alerts from SQLite and score each one.
+
+    Returns ``(outcomes, n_skipped)``. ``outcomes`` is ``None`` ONLY when the
+    SQLite read itself failed — the caller maps that to an empty report.
+    An empty list (no eligible rows) returns ``([], 0)``. Shared by
+    ``backtest_alerts`` and ``sweep_thresholds`` so the candidate sweep
+    re-uses the EXACT real scoring path (no fabricated hit-rates).
+    """
     try:
         from state.db import get_connection
 
@@ -320,11 +404,11 @@ def backtest_alerts(
             (lookback_cutoff, future_cutoff),
         ).fetchall()
     except Exception as exc:
-        logger.warning(f"backtest_alerts: SQLite read failed: {exc}")
-        return _empty_report()
+        logger.warning(f"alert_backtest: SQLite read failed: {exc}")
+        return None, 0
 
     if not rows:
-        return _empty_report()
+        return [], 0
 
     # Lazy import — keep this module pure-function at import time.
     from engine.alert_engine_v2 import _row_to_alert
@@ -342,7 +426,7 @@ def backtest_alerts(
             continue
         outcomes.append(outcome)
 
-    return _aggregate(outcomes, n_skipped, window_days)
+    return outcomes, n_skipped
 
 
 def _aggregate(
@@ -393,3 +477,313 @@ def _aggregate(
         avg_realized_pct=round(sum(reals) / total, 4),
         median_magnitude_ratio=round(median(mags), 4) if mags else 0.0,
     )
+
+
+# ─── Self-tuning loop: sweep → recommend → apply (R043) ─────────────────────
+
+# Default candidate threshold grid (% move magnitude). Used when the caller
+# does not pass an explicit grid. Spans the typical alert-bar range — a 1%
+# move (almost everything fires) up to a 25% move (only the largest fire).
+_DEFAULT_CANDIDATES: tuple[float, ...] = (1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 25.0)
+
+# Minimum number of firing alerts a candidate must produce before its
+# hit-rate is trusted as a recommendation. A threshold that fires twice and
+# hits both times shows a 100% hit-rate that is pure small-sample noise — it
+# is NOT evidence the bar belongs there. The floor forces the recommender to
+# pick a threshold backed by enough fires that the hit-rate means something.
+# Documented + enforced in ``recommend_threshold``; callers may raise it.
+_DEFAULT_MIN_FIRE_COUNT: int = 5
+
+
+def _clean_candidates(candidates) -> list[float]:
+    """Coerce a candidate grid to a sorted, de-duplicated list of finite
+    positive floats. Garbage entries are dropped, never raised on. Empty /
+    None input falls back to the default grid."""
+    if candidates is None:
+        candidates = _DEFAULT_CANDIDATES
+    out: set[float] = set()
+    try:
+        for c in candidates:
+            try:
+                v = float(c)
+            except (TypeError, ValueError):
+                continue
+            if v != v or v in (float("inf"), float("-inf")):  # NaN / inf
+                continue
+            if v <= 0:
+                continue
+            out.add(round(v, 6))
+    except TypeError:
+        # candidates is not iterable — fall back to the default grid.
+        return list(_DEFAULT_CANDIDATES)
+    if not out:
+        return list(_DEFAULT_CANDIDATES)
+    return sorted(out)
+
+
+def _score_candidate(
+    outcomes: list[AlertOutcome], threshold: float,
+) -> ThresholdScore:
+    """Re-score a list of already-evaluated outcomes at one candidate bar.
+
+    A fire clears the candidate when ``|predicted_change_pct| >= threshold``
+    — i.e. had the alert bar been raised to ``threshold``, that alert would
+    still have fired. The hit-rate over the firing subset is the candidate's
+    score. This is the REAL scoring (outcomes come from ``score_alert``);
+    the candidate only re-filters which fires are counted."""
+    firing = [o for o in outcomes if abs(o.predicted_change_pct) >= threshold]
+    fire_count = len(firing)
+    hit_count = sum(1 for o in firing if o.hit)
+    hit_rate = (hit_count / fire_count) if fire_count else 0.0
+    return ThresholdScore(
+        threshold=round(float(threshold), 6),
+        fire_count=fire_count,
+        hit_count=hit_count,
+        hit_rate=round(hit_rate, 4),
+    )
+
+
+def sweep_thresholds(
+    alert_type: str,
+    candidates=None,
+    *,
+    stock_data: Optional[dict] = None,
+    freight_data: Optional[dict] = None,
+    macro_data: Optional[dict] = None,
+    outcomes: Optional[list[AlertOutcome]] = None,
+    window_days: int = 7,
+    lookback_days: int = 90,
+) -> list[ThresholdScore]:
+    """Re-score ``alert_type`` across a candidate threshold grid.
+
+    Reuses the real backtest scoring: the alert_type's historical fires are
+    scored ONCE (via ``score_alert`` / the shared ``_collect_outcomes``), and
+    each candidate threshold simply re-filters which of those fires are
+    counted (``|predicted_change_pct| >= candidate``). Per-candidate
+    hit-rate + fire-count, never fabricated.
+
+    Pass ``outcomes`` directly (the already-scored list for this alert_type)
+    to skip the DB pull — used by ``recommend_threshold`` so the two share
+    one scoring pass. Otherwise the data dicts + window/lookback drive a
+    fresh ``_collect_outcomes`` call.
+
+    Returns one ``ThresholdScore`` per (cleaned) candidate, sorted by
+    threshold ascending. Never raises — a bad grid / read failure yields an
+    all-zero-fire-count grid or an empty list.
+    """
+    grid = _clean_candidates(candidates)
+    atype = str(alert_type or "").upper()
+
+    try:
+        if outcomes is None:
+            collected, _skipped = _collect_outcomes(
+                stock_data or {}, freight_data or {}, macro_data or {},
+                window_days=window_days, lookback_days=lookback_days,
+            )
+            collected = collected or []
+        else:
+            collected = list(outcomes)
+        # Keep only this alert_type's outcomes.
+        relevant = [o for o in collected if str(o.alert_type).upper() == atype]
+    except Exception as exc:
+        logger.debug(f"sweep_thresholds: collection failed: {exc}")
+        relevant = []
+
+    return [_score_candidate(relevant, c) for c in grid]
+
+
+def recommend_threshold(
+    alert_type: str,
+    candidates=None,
+    *,
+    min_fire_count: int = _DEFAULT_MIN_FIRE_COUNT,
+    stock_data: Optional[dict] = None,
+    freight_data: Optional[dict] = None,
+    macro_data: Optional[dict] = None,
+    outcomes: Optional[list[AlertOutcome]] = None,
+    window_days: int = 7,
+    lookback_days: int = 90,
+) -> ThresholdRecommendation:
+    """Recommend a threshold for ``alert_type`` from the swept candidate grid.
+
+    Objective
+    ---------
+    Pick the candidate that MAXIMIZES hit-rate, SUBJECT TO a min-fire-count
+    floor. A threshold with a dazzling hit-rate that almost never fires is
+    useless — a 100%-hit-rate bar that fired twice is small-sample noise, not
+    signal. The floor (``min_fire_count``, default
+    ``_DEFAULT_MIN_FIRE_COUNT``) is the minimum number of historical fires a
+    candidate must produce before its hit-rate is trusted. Candidates below
+    the floor are ineligible.
+
+    Tie-break
+    ---------
+    Among candidates tied on (rounded) hit-rate above the floor, prefer the
+    LOWER threshold — it fires more often, catching more real moves at the
+    same accuracy. (A secondary tie on threshold cannot happen: the grid is
+    de-duplicated.)
+
+    Honesty
+    -------
+    When NO candidate clears the floor, ``recommended`` is None and ``reason``
+    says so — we never fabricate a recommendation from too-thin evidence.
+
+    The 'why' compares the recommended threshold's hit-rate / fire-count to
+    the CURRENT threshold (read from the override store, keyed by alert_type;
+    falls back to the candidate at-or-below the current bar for an apples-to-
+    apples hit-rate). Never raises.
+    """
+    atype = str(alert_type or "").upper()
+    try:
+        min_floor = max(1, int(min_fire_count))
+    except (TypeError, ValueError):
+        min_floor = _DEFAULT_MIN_FIRE_COUNT
+
+    # Score the alert_type's fires ONCE, then sweep — one scoring pass.
+    try:
+        if outcomes is None:
+            collected, _skipped = _collect_outcomes(
+                stock_data or {}, freight_data or {}, macro_data or {},
+                window_days=window_days, lookback_days=lookback_days,
+            )
+            collected = collected or []
+        else:
+            collected = list(outcomes)
+        relevant = [o for o in collected if str(o.alert_type).upper() == atype]
+    except Exception as exc:
+        logger.debug(f"recommend_threshold: collection failed: {exc}")
+        relevant = []
+
+    swept = sweep_thresholds(atype, candidates, outcomes=relevant)
+
+    # Current threshold from the override store (keyed by alert_type).
+    current_threshold = _current_threshold_for(atype)
+    current_hr, current_fc = _score_at_current(relevant, current_threshold, swept)
+
+    # Eligible = candidates clearing the floor. Maximize hit-rate; tie-break
+    # to the lower threshold (swept is already threshold-ascending, so the
+    # first max under a stable sort is the lowest-threshold winner).
+    eligible = [s for s in swept if s.fire_count >= min_floor]
+    if not eligible:
+        return ThresholdRecommendation(
+            alert_type=atype,
+            recommended=None,
+            current_threshold=current_threshold,
+            current_hit_rate=current_hr,
+            current_fire_count=current_fc,
+            min_fire_count=min_floor,
+            reason=(
+                f"Insufficient data: no candidate threshold produced at least "
+                f"{min_floor} historical fires of {atype or 'this alert type'}. "
+                "Not recommending a change."
+            ),
+            candidates=swept,
+        )
+
+    best = max(eligible, key=lambda s: (s.hit_rate, -s.threshold))
+
+    if current_hr is not None:
+        delta = best.hit_rate - current_hr
+        reason = (
+            f"At threshold {best.threshold:g} the hit-rate is "
+            f"{best.hit_rate * 100:.1f}% over {best.fire_count} fires "
+            f"(vs {current_hr * 100:.1f}% over {current_fc} fires at the "
+            f"current {current_threshold:g} bar — "
+            f"{'+' if delta >= 0 else ''}{delta * 100:.1f} pts)."
+        )
+    else:
+        reason = (
+            f"At threshold {best.threshold:g} the hit-rate is "
+            f"{best.hit_rate * 100:.1f}% over {best.fire_count} fires. "
+            "No current override on record to compare against."
+        )
+
+    return ThresholdRecommendation(
+        alert_type=atype,
+        recommended=best.threshold,
+        recommended_hit_rate=best.hit_rate,
+        recommended_fire_count=best.fire_count,
+        current_threshold=current_threshold,
+        current_hit_rate=current_hr,
+        current_fire_count=current_fc,
+        min_fire_count=min_floor,
+        reason=reason,
+        candidates=swept,
+    )
+
+
+def _current_threshold_for(alert_type: str) -> Optional[float]:
+    """Read the alert_type's current override threshold from the store, or
+    None when no override exists. Best-effort — any failure returns None."""
+    try:
+        from engine.route_thresholds import load_route_thresholds
+        rt = load_route_thresholds().get(str(alert_type).upper())
+        return float(rt.threshold_pct) if rt is not None else None
+    except Exception:
+        return None
+
+
+def _score_at_current(
+    outcomes: list[AlertOutcome],
+    current_threshold: Optional[float],
+    swept: list[ThresholdScore],
+) -> tuple[Optional[float], Optional[int]]:
+    """Hit-rate + fire-count at the current bar, for the 'why' delta.
+
+    When a current override exists we score the outcomes directly at that
+    exact bar (so the comparison is honest even if the bar is off-grid).
+    When no override exists, there is no baseline — return (None, None)."""
+    if current_threshold is None:
+        return None, None
+    try:
+        s = _score_candidate(outcomes, float(current_threshold))
+        if s.fire_count == 0:
+            return None, 0
+        return s.hit_rate, s.fire_count
+    except Exception:
+        return None, None
+
+
+def apply_recommended_threshold(
+    alert_type: str,
+    value: float,
+    *,
+    severity: Optional[str] = None,
+):
+    """Write a recommended threshold into the override store (the APPLY side).
+
+    Best-effort, validated, reversible. Delegates to
+    ``engine.route_thresholds.set_threshold_for_key`` — the same kv_state
+    store the rate detector already reads — keying the override by
+    ``alert_type`` (upper-cased). The returned ``ThresholdWriteResult``
+    carries the prior threshold so the change can be undone.
+
+    This is the side-effecting half of the loop; the pure recommendation
+    logic lives entirely in ``recommend_threshold`` and never touches the
+    store. Never raises — a validation / write failure returns a result with
+    ``ok=False``.
+    """
+    try:
+        from engine.route_thresholds import set_threshold_for_key
+        return set_threshold_for_key(
+            str(alert_type or "").upper(), value, severity=severity,
+        )
+    except Exception as exc:
+        logger.debug(f"apply_recommended_threshold: write failed: {exc}")
+        # Mirror the ThresholdWriteResult contract on a hard failure.
+        try:
+            from engine.route_thresholds import ThresholdWriteResult
+            return ThresholdWriteResult(
+                ok=False, key=str(alert_type or "").upper(),
+                new_value=float(value) if _is_finite(value) else 0.0,
+            )
+        except Exception:
+            return None
+
+
+def _is_finite(x) -> bool:
+    try:
+        v = float(x)
+        return v == v and v not in (float("inf"), float("-inf"))
+    except (TypeError, ValueError):
+        return False

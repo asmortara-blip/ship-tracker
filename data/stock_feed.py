@@ -61,7 +61,13 @@ def _fetch_single(symbol: str, lookback_days: int) -> pd.DataFrame:
     logger.debug(f"yfinance fetch: {symbol} ({lookback_days}d)")
     try:
         ticker = yf.Ticker(symbol)
-        raw = ticker.history(period=f"{lookback_days}d", interval="1d", auto_adjust=True)
+        # R127: auto_adjust=False keeps ``Close`` as the RAW as-observed price
+        # (display = real share price; no look-ahead from back-restating history
+        # on future splits/dividends). yfinance includes the Dividends + Stock
+        # Splits action columns by default, which normalize_stock_df folds into
+        # the forward look-ahead-free adj_factor for total-return backtests.
+        raw = ticker.history(period=f"{lookback_days}d", interval="1d",
+                             auto_adjust=False)
     except Exception as e:
         logger.warning(f"yfinance request failed for {symbol}: {e}")
         # Fallback: return empty DataFrame so the caller skips this ticker
@@ -125,11 +131,62 @@ def get_pct_change(symbol: str, stock_data: dict[str, pd.DataFrame], days: int =
     df = stock_data.get(symbol)
     if df is None or len(df) < 2:
         return None
-    recent = df.tail(days + 1)
+    # R127: use the look-ahead-free total-return path so a split in the window
+    # doesn't show a spurious ~-50% "change"; get_latest_price stays raw (the
+    # real share price).
+    from data.normalizer import adjusted_close
+    recent = adjusted_close(df).tail(days + 1)
     if len(recent) < 2:
         return None
-    start = recent["close"].iloc[0]
-    end = recent["close"].iloc[-1]
+    start = recent.iloc[0]
+    end = recent.iloc[-1]
     if start == 0:
         return None
     return (end - start) / start
+
+
+def deepen_stock_cache(
+    tickers: list[str],
+    *,
+    lookback_days: int = 1825,
+    cache_dir: str = "cache",
+    inter_request_sleep: float = 2.0,
+    fetch=None,
+) -> dict[str, str]:
+    """Persist DEEP (multi-year) price history for ``tickers`` so the headless
+    VaR-coverage backtest + book risk run on deep REAL data (the EWMA VaR was
+    validated on this depth). Writes ``cache/stocks/{sym}_{lookback}d.parquet``
+    in the canonical shape; ``var_coverage_backtest._load_cached_stock_data``
+    prefers the longest history per symbol, so the deep file wins.
+
+    Gentle + offline-safe: a courtesy sleep between fetches; a throttled / empty
+    fetch for a ticker is SKIPPED (the existing cache stands — silence never
+    overwrites real data), and NOTHING raises. ``fetch`` is injectable
+    (``(symbol, lookback_days) -> DataFrame``) for offline tests.
+
+    Returns ``{ticker: "written" | "skipped"}``.
+    """
+    import time
+
+    getter = fetch or _fetch_single
+    stocks_dir = Path(cache_dir) / "stocks"
+    result: dict[str, str] = {}
+    try:
+        stocks_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return {t: "skipped" for t in (tickers or [])}
+
+    for i, sym in enumerate(tickers or []):
+        try:
+            if i > 0 and inter_request_sleep:
+                time.sleep(inter_request_sleep)
+            df = getter(sym, lookback_days)
+            if df is None or getattr(df, "empty", True):
+                result[sym] = "skipped"
+                continue
+            df.to_parquet(stocks_dir / f"{sym.lower()}_{lookback_days}d.parquet")
+            result[sym] = "written"
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"deepen_stock_cache: {sym} skipped: {exc}")
+            result[sym] = "skipped"
+    return result

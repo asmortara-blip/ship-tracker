@@ -428,11 +428,316 @@ def get_distinct_entity_types(*, limit: int = 50) -> list[str]:
         return []
 
 
+# ─── Tamper-evident hash-chain verification (rec R100) ─────────────────────
+
+
+@dataclass
+class ChainVerification:
+    """Result of walking the audit hash-chain.
+
+    ``ok`` is True when every chained row recomputes to its stored ``row_hash``
+    and links to its predecessor. ``n_unchained`` counts legacy pre-v31 rows
+    (no ``row_hash``) that sit before the chain start. On a break,
+    ``first_break_rowid`` + ``first_break_reason`` locate the earliest anomaly.
+    """
+    ok: bool
+    n_total: int
+    n_chained: int
+    n_unchained: int
+    head: str
+    first_break_rowid: Optional[int] = None
+    first_break_reason: str = ""
+    head_matches_anchor: Optional[bool] = None  # None when no anchor supplied
+
+
+def verify_chain(expected_head: Optional[str] = None) -> ChainVerification:
+    """Verify the audit-event hash-chain end to end.
+
+    Detects in-place edits of an INTERIOR row (its content no longer matches
+    its hash), and deletions / reorders / insertions (a row whose ``prev_hash``
+    no longer links to the previous chained row). Tolerates a sanctioned
+    *prefix* prune: the first chained row's ``prev_hash`` is not checked
+    against a predecessor (it may reference a pruned row).
+
+    LIMITATION — tail tampering: editing-and-recomputing the LAST row, or
+    truncating the newest N rows, leaves a shorter internally-consistent chain
+    and is NOT detectable from the DB alone. Pass ``expected_head`` (a
+    previously **out-of-band-anchored** head row_hash, e.g. from
+    ``auth.audit.chain_head``) to catch it: a mismatch means the tail was
+    edited or truncated. ``head_matches_anchor`` reports the outcome.
+
+    Never raises — a read error returns ``ok=False`` with a reason.
+    """
+    try:
+        from auth.audit import _compute_row_hash
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT rowid AS rid, event_id, created_at, user_id, action, "
+            "entity_type, entity_id, detail_json, prev_hash, row_hash "
+            "FROM audit_events ORDER BY rowid ASC"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.verify_chain: read failed: {exc}")
+        return ChainVerification(False, 0, 0, 0, "", None, f"read failed: {exc}")
+
+    n_total = len(rows)
+    chained = [r for r in rows if (r["row_hash"] or "")]
+    n_unchained = n_total - len(chained)
+    head = (chained[-1]["row_hash"] or "") if chained else ""
+
+    prev = None
+    for i, r in enumerate(chained):
+        recomputed = _compute_row_hash(
+            r["prev_hash"] or "", r["event_id"] or "", r["created_at"] or "",
+            r["user_id"] or "", r["action"] or "", r["entity_type"] or "",
+            r["entity_id"] or "", r["detail_json"] or "{}",
+        )
+        if recomputed != (r["row_hash"] or ""):
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head,
+                int(r["rid"]), "row content does not match its hash (modified)",
+            )
+        if i > 0 and (r["prev_hash"] or "") != (prev["row_hash"] or ""):
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head,
+                int(r["rid"]),
+                "prev_hash does not link to the previous row "
+                "(insert / delete / reorder)",
+            )
+        prev = r
+
+    # The internal chain is consistent. If an out-of-band head was anchored,
+    # a mismatch here is a tail edit / truncation the in-DB walk cannot see.
+    if expected_head is not None:
+        matches = (head == expected_head)
+        if not matches:
+            return ChainVerification(
+                False, n_total, len(chained), n_unchained, head, None,
+                "head does not match the anchored value (tail edit / truncation)",
+                head_matches_anchor=False,
+            )
+        return ChainVerification(
+            True, n_total, len(chained), n_unchained, head, None, "",
+            head_matches_anchor=True,
+        )
+
+    return ChainVerification(True, n_total, len(chained), n_unchained, head, None, "")
+
+
+def reseal_chain() -> int:
+    """Recompute the whole audit chain in rowid order. Returns rows resealed.
+
+    A MAINTENANCE op for AFTER a sanctioned prune/redact (which breaks the
+    chain by design): it restores a valid chain so future writes extend a clean
+    head. Because it overwrites the hashes, it erases the chain-break evidence
+    of those edits — so it is itself a privileged action and the caller SHOULD
+    ``record_audit`` it. Never raises; returns 0 on error.
+    """
+    try:
+        from auth.audit import _compute_row_hash
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT rowid AS rid, event_id, created_at, user_id, action, "
+            "entity_type, entity_id, detail_json FROM audit_events "
+            "ORDER BY rowid ASC"
+        ).fetchall()
+        prev = ""
+        n = 0
+        # Atomic re-seal: BEGIN IMMEDIATE so a crash mid-loop cannot leave a
+        # half-resealed (broken) chain (connections are autocommit, so a bare
+        # ``with conn`` would commit each UPDATE independently).
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for r in rows:
+                rh = _compute_row_hash(
+                    prev, r["event_id"] or "", r["created_at"] or "",
+                    r["user_id"] or "", r["action"] or "", r["entity_type"] or "",
+                    r["entity_id"] or "", r["detail_json"] or "{}",
+                )
+                conn.execute(
+                    "UPDATE audit_events SET prev_hash = ?, row_hash = ? "
+                    "WHERE rowid = ?",
+                    (prev, rh, r["rid"]),
+                )
+                prev = rh
+                n += 1
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.reseal_chain: failed: {exc}")
+        return 0
+
+
+# ─── KYC / screening audit replay (R128) ──────────────────────────────────
+#
+# The "show me exactly why this vessel / counterparty was cleared on that date"
+# capability. ``auth.audit.record_screening`` persists one ``screening_run``
+# event per compliance-risk-score / screening run, with the full decision basis
+# (subject / inputs / list version / score / decision / operator / when) in the
+# ``detail_json`` column. These two helpers reconstruct that basis for an
+# auditor: one event by id (:func:`replay_screening`), or the time-ordered run
+# history of one subject (:func:`screening_history`). Both are READ-only,
+# best-effort, and NEVER raise — an auditor UI prefers an empty replay to a 500.
+
+# The action verb + entity_type ``record_screening`` writes. Kept here (not
+# imported from auth.audit) so the replay surface does not pull the write path
+# into its import graph; the two strings are the contract between writer/reader.
+_SCREENING_ACTION = "screening_run"
+_SCREENING_ENTITY_TYPE = "screening"
+
+
+def _flatten_screening_event(event: dict) -> dict:
+    """Lift a ``screening_run`` audit event into a flat replay record.
+
+    Merges the event envelope (event_id / created_at / user_id) with the
+    recorded basis from ``detail_json`` so the auditor sees one dict carrying
+    everything: WHO (``operator``), WHEN (``created_at``), the SUBJECT, the
+    modeled INPUTS, the LIST VERSION, the SCORE, the DECISION, and the
+    ``illustrative`` provenance flag. Missing basis keys degrade to honest
+    empties rather than raising — a partial record still replays what it has.
+    """
+    basis = event.get("detail_json") or {}
+    if not isinstance(basis, dict):
+        basis = {}
+    return {
+        "event_id": event.get("event_id", ""),
+        "created_at": event.get("created_at", ""),
+        # The operator is the audited user_id; surface it under both the raw
+        # column name and the auditor-facing alias so either lookup works.
+        "user_id": event.get("user_id", "") or "",
+        "operator": event.get("user_id", "") or "",
+        "subject": basis.get("subject", event.get("entity_id", "") or ""),
+        "inputs": basis.get("inputs", {}) if isinstance(basis.get("inputs"), dict) else {},
+        "list_version": basis.get("list_version", ""),
+        "score": basis.get("score", None),
+        "decision": basis.get("decision", ""),
+        "illustrative": bool(basis.get("illustrative", True)),
+    }
+
+
+def replay_screening(event_id: str) -> Optional[dict]:
+    """Reconstruct the exact recorded basis of one past screening run. (R128)
+
+    The regulator-facing replay of a single clearance: given the audit
+    ``event_id`` of a ``screening_run``, return a flat dict carrying the full
+    basis recorded at screen time — ``operator`` / ``created_at`` (when) /
+    ``subject`` / ``inputs`` (the modeled screening inputs) / ``list_version`` /
+    ``score`` / ``decision`` / ``illustrative``. This is an EXACT round-trip of
+    what ``auth.audit.record_screening`` wrote: what was recorded is what
+    replays.
+
+    Args:
+        event_id: The ``event_id`` of the ``screening_run`` audit row.
+
+    Returns:
+        The flat replay record, or ``None`` when the id is empty / unknown /
+        not a screening event, or on any read error. Never raises.
+    """
+    if not event_id or not isinstance(event_id, str):
+        return None
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT event_id, created_at, user_id, action, entity_type, "
+            "entity_id, detail_json FROM audit_events "
+            "WHERE event_id = ? AND action = ? LIMIT 1",
+            (event_id, _SCREENING_ACTION),
+        ).fetchone()
+        if row is None:
+            return None
+        event = {
+            "event_id": row["event_id"],
+            "created_at": row["created_at"],
+            "user_id": row["user_id"] or "",
+            "action": row["action"],
+            "entity_type": row["entity_type"] or "",
+            "entity_id": row["entity_id"] or "",
+            "detail_json": _parse_detail(row["detail_json"]),
+        }
+        return _flatten_screening_event(event)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.replay_screening: failed: {exc}")
+        return None
+
+
+def screening_history(subject: str, *, limit: int = 100) -> list[dict]:
+    """Time-ordered (newest-first) screening-run history for one subject. (R128)
+
+    "Show me every time this vessel / counterparty was screened." Returns the
+    list of flat replay records (same shape as :func:`replay_screening`) for
+    every ``screening_run`` whose recorded SUBJECT matches — letting an auditor
+    see how a subject's clearance evolved across list versions and operators.
+
+    Args:
+        subject: The vessel IMO / counterparty id matched against the audit
+                 ``entity_id`` (where ``record_screening`` stamps the subject).
+        limit:   Cap on rows returned, hard-enforced in SQL. ``<= 0`` → ``[]``.
+
+    Returns:
+        List of flat replay records, ``created_at`` DESC. Empty list on no
+        match, an empty subject, or any read error. Never raises.
+    """
+    if not subject or not isinstance(subject, str):
+        return []
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        return []
+    try:
+        from state.db import get_connection
+
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT event_id, created_at, user_id, action, entity_type, "
+            "entity_id, detail_json FROM audit_events "
+            "WHERE action = ? AND entity_id = ? "
+            # rowid (monotonic insert order) breaks ties so same-microsecond
+            # created_at rows stay deterministically newest-first (review).
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (_SCREENING_ACTION, subject, cap),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"engine.audit_search.screening_history: failed: {exc}")
+        return []
+
+    out: list[dict] = []
+    for row in rows:
+        out.append(_flatten_screening_event({
+            "event_id": row["event_id"],
+            "created_at": row["created_at"],
+            "user_id": row["user_id"] or "",
+            "action": row["action"],
+            "entity_type": row["entity_type"] or "",
+            "entity_id": row["entity_id"] or "",
+            "detail_json": _parse_detail(row["detail_json"]),
+        }))
+    return out
+
+
 __all__ = [
     "AuditSearchQuery",
     "AuditSearchResult",
+    "ChainVerification",
     "search_audit",
     "search_audit_count",
     "get_distinct_actions",
     "get_distinct_entity_types",
+    "verify_chain",
+    "reseal_chain",
+    "replay_screening",
+    "screening_history",
 ]

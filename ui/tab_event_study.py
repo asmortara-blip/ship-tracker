@@ -113,6 +113,16 @@ def _close_series_from_frame(frame) -> pd.Series | None:
         selected = selected.iloc[:, 0]
     values = pd.to_numeric(selected, errors="coerce")
 
+    # R127: the event study measures cumulative RETURNS over a [-pre,+post]
+    # window, so an equity frame's RAW 'close' must ride the look-ahead-free
+    # total-return basis (close * adj_factor) — else a split/large dividend
+    # inside the window injects a spurious ~50% cumulative move. Only the raw
+    # close columns are scaled (adj_close/Adj Close are already adjusted);
+    # adj_factor defaults to 1.0 so fixtures/non-equity frames are unchanged.
+    if col in ("close", "Close", "price") and "adj_factor" in frame.columns:
+        adj = pd.to_numeric(frame["adj_factor"], errors="coerce").fillna(1.0)
+        values = values * adj.reindex(values.index).fillna(1.0)
+
     # Prefer the frame's own index for dates; if it is not datetime-like, look
     # for an explicit 'date' column before giving up.
     index = frame.index
@@ -274,6 +284,30 @@ def _render_typical_move(prices: dict[str, pd.Series], events: list) -> None:
             f"real events ({_PRE}d pre / {_POST}d post window)"
         ),
     )
+
+    # Inferential verdict (S8): is the typical abnormal move statistically real,
+    # or noise? Event-level BMP-standardized test — honest about a small sample.
+    try:
+        from processing.disruption_event_study import event_study_significance
+        sig = event_study_significance(prices, [d for _, d in events],
+                                       pre=_PRE, post=_POST)
+        if sig.basis == "real":
+            verdict = ("statistically significant"
+                       if sig.significant
+                       else "NOT statistically distinguishable from zero")
+            st.caption(
+                f"**Significance** — across {sig.n_events} events "
+                f"({sig.n_observations} carrier-events): mean abnormal return "
+                f"{_pct(sig.mean_abnormal_return)}, **{verdict}** "
+                f"(t={sig.t_stat:.2f}, p={sig.p_value:.3f}; 95% bootstrap CI "
+                f"[{_pct(sig.ci_low)}, {_pct(sig.ci_high)}]). Event-level test — "
+                "cross-carrier correlation absorbed by within-event averaging; "
+                "heterogeneous events can net to no aggregate direction."
+            )
+        else:
+            st.caption(f"**Significance** — not evaluated. {sig.note}")
+    except Exception:
+        logger.debug("event_study: significance verdict skipped", exc_info=True)
 
     st.plotly_chart(
         _build_abnormal_bar(aggregate),

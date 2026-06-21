@@ -20,6 +20,8 @@ from typing import Any
 
 from loguru import logger
 
+from utils.disclosure import MODELED_NOTICE
+
 try:
     import openpyxl
     from openpyxl import Workbook
@@ -174,6 +176,20 @@ def _add_footer(ws, row_num: int, ncols: int) -> None:
     if ncols > 1:
         try:
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=min(ncols, 20))
+        except Exception:
+            pass
+
+    # Mandatory not-advice / modeled-provenance disclosure on every sheet — the
+    # workbook is built to travel outside the app where the banners don't follow.
+    ws.append([MODELED_NOTICE])
+    dr = ws.max_row
+    ws.row_dimensions[dr].height = 14
+    dcell = ws.cell(row=dr, column=1)
+    dcell.font      = _FOOTER_FONT
+    dcell.alignment = _ALIGN_LEFT
+    if ncols > 1:
+        try:
+            ws.merge_cells(start_row=dr, start_column=1, end_row=dr, end_column=min(ncols, 20))
         except Exception:
             pass
 

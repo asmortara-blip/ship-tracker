@@ -1447,6 +1447,32 @@ def _render_audit_log() -> None:
         st.error("Audit log panel unavailable.")
 
 
+def _resolve_audit_scope(
+    *,
+    viewer_is_admin: bool,
+    self_uid: Optional[str],
+    typed_id: str,
+    admin_scope: bool,
+) -> Optional[str]:
+    """Resolve the effective ``user_id`` filter for the audit-log search.
+
+    SECURITY: only an admin may broaden scope beyond their own account. A
+    non-admin is hard-scoped to ``self_uid`` regardless of the (UI-disabled but
+    still POST-able) ``admin_scope`` checkbox or any value typed into the user-id
+    box — closing the self-asserted-admin read of the org-wide audit log. A
+    returned ``None`` means "all users" and is reachable ONLY by an admin (or by
+    a session-less CLI/test caller, which does not go through this panel).
+    """
+    if not viewer_is_admin:
+        return self_uid or None
+    typed = (typed_id or "").strip()
+    if typed:
+        return typed
+    if admin_scope:
+        return None
+    return self_uid or None
+
+
 def _render_audit_search_panel() -> None:
     """Audit log search panel — multi-filter search over ``audit_events``.
 
@@ -1501,6 +1527,32 @@ def _render_audit_search_panel() -> None:
         action_options = ["(any)"] + actions_db
         entity_type_options = ["(any)"] + entity_types_db
 
+        # ── Server-side RBAC: only admins may scope the audit log beyond
+        # their own account. Non-admins are hard-scoped to self regardless of
+        # the controls below (which are also disabled for them).
+        from auth.authz import is_admin
+        viewer_is_admin = is_admin()
+
+        # ── Admin: on-demand tamper-evident hash-chain integrity check.
+        # Run behind a button so the full-table walk is not paid on every
+        # rerun. Detects in-place edits / mid-chain deletes / reorders; tail
+        # truncation needs an out-of-band anchored head (see verify_chain).
+        if viewer_is_admin:
+            if st.button("Verify audit-chain integrity",
+                         key="audit_verify_chain"):
+                from engine.audit_search import verify_chain
+                _vc = verify_chain()
+                if _vc.ok:
+                    st.success(
+                        f"Audit chain verified — {_vc.n_chained} chained "
+                        f"rows intact."
+                    )
+                else:
+                    st.error(
+                        f"Audit chain integrity FAILED at row "
+                        f"{_vc.first_break_rowid}: {_vc.first_break_reason}"
+                    )
+
         # ── Row 1: user_id | action | action_prefix ──────────────────────
         # ``user_id_input`` defaults to empty so the "All users" checkbox
         # below can fill in the current user's id when toggled OFF.
@@ -1510,8 +1562,10 @@ def _render_audit_search_panel() -> None:
                 "User ID",
                 value="",
                 key="audit_search_user_id",
+                disabled=not viewer_is_admin,
                 help="Exact match. Leave blank to filter to your own "
-                     "user (unless 'All users' is enabled).",
+                     "user (unless 'All users' is enabled). Admin role "
+                     "required to query another user's events.",
             )
         with r1c2:
             action_pick = st.selectbox(
@@ -1590,8 +1644,9 @@ def _render_audit_search_panel() -> None:
                 "All users (admin)",
                 value=False,
                 key="audit_search_admin_scope",
-                help="Show events across every user. Default is your "
-                     "own user only.",
+                disabled=not viewer_is_admin,
+                help="Show events across every user. Admin role required; "
+                     "non-admins are always scoped to their own user.",
             )
 
         # ── Resolve the per-user scope. The current user's id is always
@@ -1599,18 +1654,23 @@ def _render_audit_search_panel() -> None:
         # user_id box) so the "scoped to" caption can tell them what is
         # actually being applied.
         self_uid = current_user_id()
-        # If the operator typed a user_id, honour it verbatim. Otherwise
-        # default to their own unless "All users" is checked.
-        if user_id_input.strip():
-            effective_user_id: Optional[str] = user_id_input.strip()
-        elif admin_scope:
-            effective_user_id = None
-        else:
-            # No typed value and not admin → scope to self. An empty
-            # self_uid (no session) falls through to "no scope" which
-            # is intentional — the local CLI / test path should not
-            # be silently filtered to a non-existent user.
-            effective_user_id = self_uid or None
+        # Effective scope is resolved server-side via _resolve_audit_scope:
+        # admins may type a user_id or broaden to all users; non-admins are
+        # hard-scoped to their own account regardless of the (disabled but
+        # still POST-able) admin controls. An empty self_uid (no session)
+        # falls through to "no scope" only on the CLI/test path, which never
+        # renders this panel.
+        effective_user_id: Optional[str] = _resolve_audit_scope(
+            viewer_is_admin=viewer_is_admin,
+            self_uid=self_uid,
+            typed_id=user_id_input,
+            admin_scope=admin_scope,
+        )
+        if not viewer_is_admin:
+            st.caption(
+                "Scoped to your account — admin role required to view "
+                "other users' audit events."
+            )
 
         # ── Search button drives the query so the panel does not refetch
         # on every keystroke. The result lives in a ``st.session_state``
@@ -2780,10 +2840,64 @@ def _render_source_health() -> None:
         )
 
         _render_source_health_alert_config()
+        _render_feed_confidence()
 
     except Exception as exc:
         logger.exception(f"Source health panel render error: {exc}")
         st.error("Source health panel unavailable.")
+
+
+def _render_feed_confidence() -> None:
+    """Per-feed confidence from the per-fetch provenance ledger (R003) — the
+    first UI surfacing of ``fetch_realness_summary``, via a confidence lens so an
+    operator can downweight a low-confidence feed instead of trusting it blindly.
+    """
+    try:
+        from processing.feed_confidence import feed_confidence_report
+        from state.fetch_ledger import fetch_realness_summary
+
+        summary = fetch_realness_summary()
+        if not summary or not summary.get("n"):
+            st.caption(
+                "No provenance records yet — feed confidence accrues as feeds "
+                "stamp each fetch (R003).")
+            return
+        rep = feed_confidence_report(summary)
+        ov = rep["overall"]
+
+        def _cc(label: str) -> str:
+            return C_HIGH if label == "high" else (C_MOD if label == "medium" else C_LOW)
+
+        section_header(
+            "Feed Confidence",
+            "How trustworthy each feed's inputs were — real vs synthetic, fresh "
+            "vs stale (R003 provenance)")
+        metric_card_row([
+            {"label": "Overall Feed Confidence",
+             "value": f"{ov['confidence'] * 100:.0f}%",
+             "accent": _cc(ov["label"]),
+             "sublabel": f"{ov['label']} · {ov['n']} fetches (24h)"},
+        ], columns=1)
+        if rep["by_source"]:
+            # Plain-text cells (the label conveys the level) — no inline <span
+            # style>, which the tab's inline-style budget deliberately caps to
+            # keep the migration to ui.styles helpers from regressing.
+            rows = [[
+                r.source,
+                f"{r.confidence * 100:.0f}% ({r.label})",
+                f"{r.realness_rate * 100:.0f}%",
+                f"{r.freshness_rate * 100:.0f}%",
+                f"{r.synthetic_rate * 100:.0f}%",
+                str(r.n),
+            ] for r in rep["by_source"]]
+            wsj_market_table(
+                headers=["Source", "Confidence", "Real", "Fresh", "Synthetic", "Fetches"],
+                rows=rows, title="Per-feed confidence (worst first)")
+        st.caption(
+            "Confidence = realness × (0.6 + 0.4×freshness) — a modeled blend; the "
+            "inputs are the real per-fetch provenance stamps.")
+    except Exception as exc:
+        logger.debug(f"feed confidence panel skipped: {exc}")
 
 
 def _render_source_health_alert_config() -> None:

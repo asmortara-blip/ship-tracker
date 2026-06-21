@@ -174,7 +174,13 @@ def _clamp01(value: float) -> float:
 
 
 def _safe_close_series(df) -> pd.Series | None:
-    """Extract a clean, chronologically-ordered ``close`` price Series.
+    """Extract a clean, chronologically-ordered TOTAL-RETURN price Series.
+
+    The forward returns sampled off this Series drive the OOS validator, so it
+    rides the look-ahead-free total-return path ``close * adj_factor`` (R127): a
+    split/large dividend in the window would otherwise inject a spurious ~-50%
+    forward return. ``adj_factor`` defaults to 1.0 when absent (fixtures / legacy
+    frames), so those numbers are unchanged.
 
     Returns ``None`` for anything unusable — ``None``/empty frame, no ``close``
     column, or fewer than two finite prices. Never raises.
@@ -188,7 +194,8 @@ def _safe_close_series(df) -> pd.Series | None:
         if "date" in work.columns:
             # Order by date so "forward" genuinely means forward in time.
             work = work.sort_values("date")
-        close = pd.to_numeric(work["close"], errors="coerce").dropna()
+        from data.normalizer import adjusted_close
+        close = adjusted_close(work).dropna()
         if len(close) < 2:
             return None
         return close.reset_index(drop=True)
@@ -667,6 +674,62 @@ def validate_signals(
     return report
 
 
+def load_point_in_time_stock_data(
+    tickers,
+    as_of_date,
+    *,
+    lookback_days: int = 180,
+    cache=None,
+) -> dict:
+    """Load ``{ticker -> DataFrame}`` AS IT WAS KNOWN on ``as_of_date`` (R110).
+
+    The point-in-time seam for a look-ahead-free validation run. Instead of
+    today's (possibly revised) price frames, this reads each ticker's bitemporal
+    vintage whose fetch_date <= ``as_of_date`` via
+    :meth:`CacheManager.load_as_of`, reconstructing the exact ``stock_data`` a
+    validator would have seen on that knowledge-date. It NEVER fetches and never
+    falls back to today's data — a ticker with no vintage as-known-then is simply
+    omitted (no look-ahead). The result drops straight into
+    :func:`build_validation_report` / :func:`validate_signals` unchanged.
+
+    This is **optional and default-off**: normal (non-backtest) reads never call
+    it, so the live UI path is untouched. It mirrors ``stock_feed.fetch_all_stocks``
+    key conventions (``key=f"{ticker}_{lookback_days}d"``, ``source="stocks"``)
+    so it reads the very vintages that feed wrote.
+
+    Parameters
+    ----------
+    tickers:
+        Iterable of ticker symbols to reconstruct.
+    as_of_date:
+        Knowledge-date (ISO ``YYYY-MM-DD`` string, ``date`` or ``datetime``).
+    lookback_days:
+        Must match the live fetch's lookback so the cache key lines up (the
+        ``stock_feed`` default is 180).
+    cache:
+        Optional ``CacheManager``; a default-rooted one is created if omitted.
+
+    Returns
+    -------
+    dict
+        ``ticker -> DataFrame`` for every ticker with a vintage as-known-then;
+        tickers without one are omitted. Empty dict on any failure (never raises).
+    """
+    try:
+        from data.cache_manager import CacheManager
+        cache = cache or CacheManager()
+        out: dict = {}
+        for symbol in (tickers or []):
+            key = f"{symbol}_{lookback_days}d"
+            df = cache.load_as_of(key, as_of_date, source="stocks")
+            if df is not None and not getattr(df, "empty", True):
+                out[symbol] = df
+        return out
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("load_point_in_time_stock_data: as-of read failed")
+        return {}
+
+
 def build_validation_report(
     stress_report,
     exposure_matrix,
@@ -692,7 +755,10 @@ def build_validation_report(
         ``list[CommodityExposure]`` (or ``None``) — passed through to the cascade
         scorer.
     stock_data:
-        Mapping ``ticker -> DataFrame`` of synthetic price history.
+        Mapping ``ticker -> DataFrame`` of synthetic price history. For a
+        look-ahead-free point-in-time run, build this with
+        :func:`load_point_in_time_stock_data` (the as-of cache seam, R110) so the
+        validator sees prices AS THEY WERE KNOWN on a past date, not today's.
     insights:
         Optional decision-engine insights — forwarded to the cascade scorer for
         corroboration only (never changes a direction).
@@ -726,10 +792,137 @@ def build_validation_report(
     )
 
 
+def build_ledger_validation_report(
+    stock_data: dict,
+    *,
+    forward_days: int = _DEFAULT_FORWARD_DAYS,
+) -> ValidationReport:
+    """Causal, look-ahead-free validation from the FROZEN signal ledger (rec R016).
+
+    :func:`build_validation_report` re-scores TODAY's cascade ideas over PAST
+    return windows — a look-ahead the platform openly admitted (DATA_PROVENANCE).
+    This reads the point-in-time ledger instead: every idea was frozen AT ISSUE
+    (close + direction + conviction) and is marked ONLY on strictly-later closes,
+    so each row is one genuinely out-of-sample, causal observation. There is no
+    resampling of overlapping windows — one realized outcome per frozen signal,
+    fewer but honest.
+
+    Per conviction tier it reports the realized directional hit-rate against an
+    **equal-weight always-long base rate** over the same names/holding windows
+    (the fraction of those names that simply rose) — a tier only earns its keep
+    by beating naive long-everything. Returns an empty-but-valid report (never
+    raises) until the daily freeze job has accrued marked history.
+    """
+    report = ValidationReport(
+        forward_days=forward_days,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        source=DataSource(
+            name="Frozen point-in-time signal ledger (causal, look-ahead-free)",
+            kind=DataKind.MODELED, quality=DataQuality.GOOD,
+        ),
+    )
+    try:
+        from state.signal_ledger import mark_ledger
+        marks = [m for m in mark_ledger(stock_data)
+                 if m.get("issue_close") and m.get("current_close")]
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("build_ledger_validation_report: ledger read failed")
+        marks = []
+
+    if not marks:
+        report.summary = (
+            "No frozen, marked signals yet — the causal track record accrues as "
+            "ideas are issued and marked forward (look-ahead-free)."
+        )
+        return report
+
+    # Direction-adjusted naive baseline. A book that ALWAYS predicts a name's
+    # direction is right at the market's drift rate FOR THAT DIRECTION: a Bullish
+    # call's naive baseline is the fraction of names that rose; a Bearish call's
+    # is the fraction that fell. Comparing a bearish tier's hit-rate to the
+    # always-LONG (up) rate would be apples-to-oranges and systematically
+    # overstate it — so each signal is scored against its own directional drift.
+    # Use the ledger's SPLIT-SAFE forward price move (return_pct = the UNDIRECTED
+    # total return × 100, R127) rather than recomputing (current_close -
+    # issue_close)/issue_close off RAW closes — a split between issue and mark
+    # would otherwise flip a name's up/down vote and bias the drift baseline.
+    raw = [m["return_pct"] / 100.0 for m in marks]
+    n_raw = len(raw)
+    up_rate = sum(1 for r in raw if r > 0) / n_raw
+    down_rate = sum(1 for r in raw if r < 0) / n_raw
+
+    def _dir_baseline(direction: str) -> float:
+        return down_rate if _direction_sign(direction) < 0 else up_rate
+
+    signals: list[SignalValidation] = []
+    for m, raw_ret in zip(marks, raw):
+        signed = m["signed_return_pct"] / 100.0
+        win = signed > 0
+        b = _dir_baseline(str(m.get("direction") or ""))
+        signals.append(SignalValidation(
+            signal_id=str(m.get("ticker") or ""),
+            signal_kind="frozen ledger idea",
+            direction=str(m.get("direction") or ""),
+            conviction_label=str(m.get("conviction_label") or "?"),
+            conviction_score=round(float(m.get("conviction_score") or 0.0), 4),
+            forward_days=forward_days,
+            n_observations=1,                 # one causal OOS outcome per signal
+            n_hits=1 if win else 0,
+            hit_rate=1.0 if win else 0.0,
+            avg_forward_return=round(raw_ret, 4),
+            directional_return=round(signed, 4),
+            baseline_hit_rate=round(b, 4),
+            edge_vs_baseline=round((1.0 if win else 0.0) - b, 4),
+            low_sample=True,                  # a single realized outcome so far
+            note="single realized out-of-sample outcome (point-in-time)",
+        ))
+
+    # Tier aggregation — stable cascade order first, then any extras. The tier
+    # baseline is the mean of its signals' OWN direction-adjusted baselines
+    # (so a mixed-direction tier is still scored fairly).
+    by_tier: dict[str, list] = {}
+    for s in signals:
+        by_tier.setdefault(s.conviction_label, []).append(s)
+    ordered = [t for t in _CONVICTION_TIERS if t in by_tier] + \
+              sorted(t for t in by_tier if t not in _CONVICTION_TIERS)
+    tiers: list[TierScore] = []
+    for tier in ordered:
+        ss = by_tier[tier]
+        n = len(ss)
+        hr = round(sum(s.n_hits for s in ss) / n, 4)
+        tier_base = round(sum(s.baseline_hit_rate for s in ss) / n, 4)
+        tiers.append(TierScore(
+            tier=tier, n_signals=n, n_observations=n, hit_rate=hr,
+            avg_forward_return=round(sum(s.avg_forward_return for s in ss) / n, 4),
+            directional_return=round(sum(s.directional_return for s in ss) / n, 4),
+            baseline_hit_rate=tier_base,
+            edge_vs_baseline=round(hr - tier_base, 4),
+        ))
+
+    n_all = len(signals)
+    overall_hr = round(sum(s.n_hits for s in signals) / n_all, 4)
+    baseline = round(sum(s.baseline_hit_rate for s in signals) / n_all, 4)
+    report.signals = signals
+    report.tiers = tiers
+    report.overall_hit_rate = overall_hr
+    report.overall_baseline_hit_rate = baseline
+    report.overall_edge = round(overall_hr - baseline, 4)
+    report.overall_directional_return = round(
+        sum(s.directional_return for s in signals) / n_all, 4)
+    report.n_signals_validated = n_all
+    report.summary = (
+        f"{n_all} frozen signal(s) marked forward (causal, look-ahead-free): "
+        f"{overall_hr * 100:.0f}% directional hit-rate vs {baseline * 100:.0f}% "
+        f"always-long base rate ({(overall_hr - baseline) * 100:+.0f} pts edge)."
+    )
+    return report
+
+
 __all__ = [
     "SignalValidation",
     "TierScore",
     "ValidationReport",
     "validate_signals",
     "build_validation_report",
+    "build_ledger_validation_report",
 ]

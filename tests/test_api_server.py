@@ -184,13 +184,15 @@ def test_backtests_health_returns_200_with_all_validators(server):
 
 
 def test_backtests_health_returns_200_when_all_healthy(server):
-    """On the bundled synth all 18 validators read healthy → 200."""
+    """All validators read healthy → 200. The 18 synth validators are tuned to
+    pass; the 19th (VaR Coverage) is real-data — healthy on a well-calibrated
+    or absent cache, so the all-healthy/200 contract holds in CI + dev."""
     r = requests.get(f"{server}/api/v1/backtests/health", timeout=10)
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["healthy_count"] == body["total"]
-    assert body["total"] == 18
+    assert body["total"] == 19
 
 
 def test_backtests_health_does_not_require_authorization_header(server):
@@ -201,6 +203,32 @@ def test_backtests_health_does_not_require_authorization_header(server):
         timeout=10,
     )
     assert r.status_code in (200, 503)
+
+
+def test_backtests_health_caches_validator_run(monkeypatch):
+    """R006: the expensive validator run must be cached so an unauthenticated
+    probe storm can't re-run every validator per request and pin the worker.
+    Two calls within the TTL → exactly one run; ttl=0 forces a recompute."""
+    import worker.api_server as api
+    from tools.backtests import run_all_backtests as _real_run
+
+    api._BACKTESTS_HEALTH_CACHE = None  # start clean
+    calls = {"n": 0}
+
+    def _counting_run():
+        calls["n"] += 1
+        return _real_run()
+
+    monkeypatch.setattr("tools.backtests.run_all_backtests", _counting_run)
+    try:
+        c1 = api._get_backtests_health()
+        c2 = api._get_backtests_health()
+        assert calls["n"] == 1          # 2nd call served from cache, no re-run
+        assert c1 == c2                 # identical payload
+        api._get_backtests_health(ttl=0.0)   # expired → recompute
+        assert calls["n"] == 2
+    finally:
+        api._BACKTESTS_HEALTH_CACHE = None    # don't leak the mock's result
 
 
 # ── /api/v1/ports/supply-lines — authenticated port supply data ────────
@@ -3000,24 +3028,31 @@ def test_health_endpoint_is_not_rate_limited(server, _tight_rate_limit):
 
 
 def test_rate_limit_retry_after_is_correct_magnitude(server, monkeypatch):
-    """With capacity=2 and refill=2/sec, the bucket regrows one token
-    in 0.5s. A denied request's Retry-After should round up to 1
-    (RFC says integer-seconds; we floor at 1)."""
-    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "2")
-    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "2.0")
+    """A denied request's Retry-After is the integer-seconds ceil of the
+    token-deficit / refill-rate.
+
+    Made latency-INDEPENDENT by construction (same fix as
+    ``test_rate_limit_allows_after_refill_interval``): capacity 1 with a slow
+    0.5 tokens/sec refill. The previous capacity-2 / 2-per-sec form needed all
+    three requests to land inside the 0.5s regrow window, so a loaded or
+    reordered test run let the bucket refill a token and the 'denied' request
+    came back 200. At 0.5/sec no realistic sub-second inter-request gap refills
+    a whole token, so the second back-to-back call reliably surfaces a 429
+    regardless of machine load or collection order. 1 token deficit / 0.5
+    per-sec = 2.0s -> ceil -> 2."""
+    monkeypatch.setenv("RATE_LIMIT_CAPACITY", "1")
+    monkeypatch.setenv("RATE_LIMIT_REFILL_PER_SEC", "0.5")
     uid = _make_user()
     token = _mint_token(uid)
-    for _ in range(2):
-        requests.get(
-            f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
-        )
-    r = requests.get(
+    requests.get(                       # consume the single token
+        f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
+    )
+    r = requests.get(                   # bucket empty -> denied
         f"{server}/api/v1/alerts", headers=_bearer(token), timeout=5,
     )
     assert r.status_code == 429
-    # 1 token deficit / 2 tokens-per-sec = 0.5s → ceil → 1s.
     retry = int(r.headers["Retry-After"])
-    assert retry == 1
+    assert retry == 2
 
 
 def test_rate_limit_allows_after_refill_interval(server, monkeypatch):

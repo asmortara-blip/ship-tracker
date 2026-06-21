@@ -74,6 +74,21 @@ _SCRYPT_AVAILABLE = hasattr(hashlib, "scrypt")
 MAX_ATTEMPTS = 5
 LOCKOUT_DURATION_SECONDS = 300  # 5 minutes
 
+# ── Session lifetime (R118) ───────────────────────────────────────────────
+# Idle timeout: a session with no activity (no page render that passes the
+# gate) for longer than this is bounced back to the login form.
+IDLE_TIMEOUT_MINUTES = 60
+# Absolute lifetime cap: a session older than this is bounced regardless of
+# activity, so an always-open browser cannot stay authenticated forever.
+ABSOLUTE_LIFETIME_HOURS = 12
+
+# Session-state keys holding the two lifetime stamps (ISO-8601 UTC strings).
+# Stamped at login success alongside ``current_user`` and refreshed on each
+# gate pass. Kept as sibling keys (not on the User dataclass) so the User
+# identity surface stays immutable and credential-free.
+_SESSION_AUTHED_AT_KEY = "_session_authed_at"
+_SESSION_LAST_SEEN_KEY = "_session_last_seen"
+
 ENV_HASH_KEY = "APP_PASSWORD_HASH"
 ENV_SALT_KEY = "APP_PASSWORD_SALT"
 
@@ -191,6 +206,84 @@ def _get_password_config() -> Optional[Tuple[bytes, bytes]]:
     return hash_bytes, salt_bytes
 
 
+def _parse_iso_utc(value: object) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp string into a tz-aware UTC ``datetime``.
+
+    Returns ``None`` when *value* is missing, the wrong type, or
+    unparseable. A tz-naive timestamp is ASSUMED to be UTC (the gate only
+    ever writes tz-aware UTC stamps; a naive one means a hand-edited or
+    legacy value, and assuming UTC is the safe interpretation here).
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _session_expiry_check(
+    authed_at: object,
+    last_seen: object,
+    now: datetime,
+) -> Tuple[bool, str]:
+    """Pure decision: has this session expired? ``(expired, reason)``.
+
+    Inputs are the raw stored stamps (ISO strings or anything) and the
+    current time. This function NEVER raises and has no Streamlit
+    dependency, so it is unit-tested in isolation.
+
+    Rules (fail-closed on corruption, fail-open on first-seen):
+
+    * BOTH stamps missing/empty → ``(False, "no_stamps")``. A session that
+      has a user but no lifetime stamps is treated as *just starting* its
+      window — the caller stamps ``now`` and allows. This avoids expiring
+      pre-existing sessions (and pre-R118 tests) that never got stamped.
+    * A stamp that is PRESENT but unparseable → ``(True, "unparseable_*")``.
+      Corruption is treated as expired (fail-closed for security): we
+      cannot trust a timestamp we cannot read.
+    * ``now - authed_at > ABSOLUTE_LIFETIME_HOURS`` → ``(True, "absolute")``.
+    * ``now - last_seen > IDLE_TIMEOUT_MINUTES`` → ``(True, "idle")``.
+    * Otherwise → ``(False, "ok")``.
+
+    The absolute cap is checked before idle so an old-but-recently-active
+    session reports the more fundamental reason.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    authed_present = isinstance(authed_at, str) and bool(authed_at)
+    last_seen_present = isinstance(last_seen, str) and bool(last_seen)
+
+    # First-seen-without-stamps: allow and let the caller stamp now.
+    if not authed_present and not last_seen_present:
+        return (False, "no_stamps")
+
+    authed_dt = _parse_iso_utc(authed_at) if authed_present else None
+    last_seen_dt = _parse_iso_utc(last_seen) if last_seen_present else None
+
+    # A stamp that exists but won't parse is corruption → fail closed.
+    if authed_present and authed_dt is None:
+        return (True, "unparseable_authed_at")
+    if last_seen_present and last_seen_dt is None:
+        return (True, "unparseable_last_seen")
+
+    # Absolute lifetime cap (checked first — the more fundamental bound).
+    if authed_dt is not None:
+        if now - authed_dt > timedelta(hours=ABSOLUTE_LIFETIME_HOURS):
+            return (True, "absolute")
+
+    # Idle timeout.
+    if last_seen_dt is not None:
+        if now - last_seen_dt > timedelta(minutes=IDLE_TIMEOUT_MINUTES):
+            return (True, "idle")
+
+    return (False, "ok")
+
+
 def generate_password_hash(plaintext: str) -> Tuple[str, str]:
     """One-shot helper: produce ``(hash_hex, salt_hex)`` for a plaintext.
 
@@ -249,6 +342,128 @@ def _seconds_until_unlock(state: AuthState) -> int:
     return max(0, int(delta.total_seconds()))
 
 
+# ── Session lifetime helpers (R118) ───────────────────────────────────────
+
+def _now_iso() -> str:
+    """Current time as an ISO-8601 UTC string (matches the stored shape)."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def stamp_session_start(st) -> None:
+    """Record session start: set both ``authed_at`` and ``last_seen`` to now.
+
+    Called on every login-success path (single-password and multi-user) so
+    the idle + absolute windows begin at the moment of authentication.
+    Never raises — a session-state hiccup must not break login.
+    """
+    try:
+        now = _now_iso()
+        st.session_state[_SESSION_AUTHED_AT_KEY] = now
+        st.session_state[_SESSION_LAST_SEEN_KEY] = now
+    except Exception:
+        pass
+
+
+def _touch_last_seen(st) -> None:
+    """Mark this gate-pass as activity: refresh ``last_seen`` to now. Never
+    raises."""
+    try:
+        st.session_state[_SESSION_LAST_SEEN_KEY] = _now_iso()
+    except Exception:
+        pass
+
+
+def _pop_session_key(st, key) -> None:
+    """Best-effort remove one session_state key. Never raises."""
+    try:
+        if key in st.session_state:
+            del st.session_state[key]
+    except Exception:
+        try:
+            st.session_state[key] = None
+        except Exception:
+            pass
+
+
+def _clear_session_lifetime(st) -> None:
+    """Drop the two lifetime stamps. Never raises."""
+    _pop_session_key(st, _SESSION_AUTHED_AT_KEY)
+    _pop_session_key(st, _SESSION_LAST_SEEN_KEY)
+
+
+# User-scoped values cached in ``st.session_state`` that MUST be purged when a
+# session ENDS (timeout-expiry OR logout) — otherwise the next user to sign in
+# on the SAME browser session inherits the prior user's positions / alert rules /
+# investor reports / pending-MFA secrets, and the init-once-no-rekey tab loaders
+# (e.g. tab_portfolio._init_positions, tab_alerts) adopt them: cross-user data
+# disclosure + ledger write-corruption. Keep in sync with the per-tab session
+# caches. (R118 adversarial-review finding.)
+_USER_SCOPED_SESSION_KEYS: tuple[str, ...] = (
+    "portfolio_positions",
+    "user_alerts",
+    "active_filter_payload",
+    "active_filter_name",
+    "current_investor_report",
+    "previous_investor_report",
+    "mfa_pending_secret",
+    "mfa_pending_codes",
+    "pending_mfa_secret",
+    "mfa_confirm_disable",
+    "mfa_regen_confirm",
+    "setup_generated_hash",
+    "setup_generated_salt",
+)
+
+
+def _clear_user_scoped_session(st) -> None:
+    """Fully tear down a user's session: drop ``current_user``, the lifetime
+    stamps, AND every user-scoped cache, so the next sign-in on the same browser
+    inherits NOTHING. Shared by the timeout-expiry and logout paths so the two
+    re-auth triggers purge identically. Never raises."""
+    _pop_session_key(st, "current_user")
+    _clear_session_lifetime(st)
+    for key in _USER_SCOPED_SESSION_KEYS:
+        _pop_session_key(st, key)
+
+
+def _expire_multiuser_session(st) -> None:
+    """Tear down an expired multi-user session — drop the current user, the
+    lifetime stamps, and every user-scoped cache so the gate falls through to the
+    login form with nothing for the next user to inherit. Never raises."""
+    _clear_user_scoped_session(st)
+
+
+def _enforce_session_lifetime(st) -> bool:
+    """Apply the R118 idle + absolute lifetime policy to the current
+    session. Returns ``True`` if the session is still valid (and refreshes
+    ``last_seen``), ``False`` if it just expired (and tears the session
+    down). Never raises — on any unexpected error it returns ``True`` so the
+    gate fails open to the EXISTING behaviour rather than crashing a live
+    session (the stamps are best-effort hardening, not the primary auth
+    decision, which still rests on ``current_user`` being present).
+    """
+    try:
+        authed_at = st.session_state.get(_SESSION_AUTHED_AT_KEY)
+        last_seen = st.session_state.get(_SESSION_LAST_SEEN_KEY)
+        expired, reason = _session_expiry_check(
+            authed_at, last_seen, datetime.now(timezone.utc)
+        )
+        if expired:
+            logger.info(f"auth.gate: session expired ({reason}); re-auth required.")
+            _expire_multiuser_session(st)
+            return False
+        if reason == "no_stamps":
+            # Legacy/edge session with a user but no stamps: start the
+            # window now rather than expiring it.
+            stamp_session_start(st)
+        else:
+            _touch_last_seen(st)
+        return True
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(f"auth.gate: session-lifetime check failed; allowing: {exc}")
+        return True
+
+
 # ── Public API ────────────────────────────────────────────────────────────
 
 def is_authenticated() -> bool:
@@ -293,7 +508,16 @@ def require_auth() -> bool:
     import streamlit as st
     state = _get_or_create_auth_state()
     if state.authenticated:
-        return True
+        # R118: enforce idle + absolute lifetime on the single-password
+        # session too. On expiry, flip the flag off and fall through to the
+        # login form below; otherwise refresh ``last_seen``.
+        if _enforce_session_lifetime(st):
+            return True
+        state.authenticated = False
+        try:
+            st.info("Your session expired. Please sign in again.")
+        except Exception:
+            pass
 
     stored_hash, salt = config
 
@@ -335,6 +559,7 @@ def require_auth() -> bool:
             state.authenticated = True
             state.attempt_count = 0
             state.locked_until = ""
+            stamp_session_start(st)  # R118: begin idle + absolute windows
             st.markdown("</div>", unsafe_allow_html=True)
             st.rerun()
             return True  # unreachable in practice — rerun reloads the script
@@ -368,13 +593,11 @@ def logout() -> None:
     state.authenticated = False
     state.attempt_count = 0
     state.locked_until = ""
-    # Multi-user session: also clear the per-user session token so the
-    # next page render bounces back to the login form.
-    if "current_user" in st.session_state:
-        try:
-            del st.session_state["current_user"]
-        except Exception:
-            st.session_state["current_user"] = None
+    # Multi-user session: drop current_user, the lifetime stamps, AND every
+    # user-scoped cache (positions/alerts/reports/pending-MFA secrets), so the
+    # next user on the same browser inherits nothing. Converges the logout +
+    # timeout-expiry teardown (R118 review).
+    _clear_user_scoped_session(st)
     st.rerun()
 
 
@@ -427,10 +650,20 @@ def require_auth_with_users() -> bool:
         return require_auth()
 
     # Mode 1: at least one user → render the multi-user UI. If a
-    # session token is already set, allow through immediately.
+    # session token is already set, allow through immediately — but FIRST
+    # enforce the R118 idle + absolute lifetime policy. An expired session
+    # is torn down (current_user dropped) and falls through to the login
+    # form below; a valid one has its ``last_seen`` refreshed.
     existing = st.session_state.get("current_user")
     if isinstance(existing, User):
-        return True
+        if _enforce_session_lifetime(st):
+            return True
+        # Expired: brief notice, then render the login form (same path an
+        # unauthenticated user takes — do NOT crash).
+        try:
+            st.info("Your session expired. Please sign in again.")
+        except Exception:
+            pass
 
     # Render the auth surface. Same Refined-Steel container styling as
     # the single-password gate.
@@ -500,6 +733,7 @@ def require_auth_with_users() -> bool:
             )
             if user is not None:
                 st.session_state["current_user"] = user
+                stamp_session_start(st)  # R118: begin idle + absolute windows
                 st.markdown("</div>", unsafe_allow_html=True)
                 st.rerun()
                 return True  # unreachable in practice
@@ -549,6 +783,7 @@ def require_auth_with_users() -> bool:
             user = signup(new_u or "", new_p or "")
             if user is not None:
                 st.session_state["current_user"] = user
+                stamp_session_start(st)  # R118: begin idle + absolute windows
                 st.markdown("</div>", unsafe_allow_html=True)
                 st.rerun()
                 return True  # unreachable in practice

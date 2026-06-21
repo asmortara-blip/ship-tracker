@@ -66,6 +66,37 @@ class ReportMeta:
     public_slug: str = ""        # URL-safe base64url token; "" = not shared
     public_expires_at: str = ""  # ISO-8601 UTC; "" or past time = invalid
     public_password_protected: bool = False  # True iff public link requires a password
+    report_version: int = 1      # 1-indexed position in the lineage (v34)
+    supersedes_id: str = ""      # report_id of the prior version; "" = original (v34)
+    content_hash: str = ""       # SHA-256 hex of the issued bytes; "" = unhashed legacy (v35)
+
+
+# ---------------------------------------------------------------------------
+# Content-hash helpers for tamper-evident report bytes (R121, v35)
+# ---------------------------------------------------------------------------
+
+
+def _sha256_bytes(b: bytes) -> str:
+    """Return the SHA-256 hex digest of *b*.
+
+    The single canonical hash used by both the writer (:func:`save_report` /
+    :func:`amend_report` via :func:`_insert_report_row`) and the verifier
+    (:func:`verify_report_integrity`), so a recomputation matches the stored
+    value byte-for-byte.
+    """
+    return hashlib.sha256(b).hexdigest()
+
+
+def _sha256_file(path: "Path") -> str:
+    """Return the SHA-256 hex digest of the file at *path*.
+
+    Reads the EXACT on-disk bytes (no text decode / re-encode) and hashes
+    them, so the digest matches what :func:`_sha256_bytes` produced over the
+    same buffer at write time. Raises on a missing / unreadable file — the
+    caller (:func:`verify_report_integrity`) is responsible for catching that
+    and reporting ``missing`` rather than letting it propagate.
+    """
+    return _sha256_bytes(Path(path).read_bytes())
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +204,27 @@ def _row_to_meta(row) -> ReportMeta:
         public_password_protected = bool(_pw_hash)
     except (IndexError, KeyError):
         public_password_protected = False
+    # v34 lineage columns — tolerate rows from a pre-v34 DB / a row factory
+    # that strips columns. report_version defaults to 1 (original);
+    # supersedes_id is NULL for an original report, which we normalise to ""
+    # on the meta so the dataclass carries a plain string.
+    try:
+        _rv = row["report_version"]
+        report_version = int(_rv) if _rv is not None else 1
+    except (IndexError, KeyError, TypeError, ValueError):
+        report_version = 1
+    try:
+        supersedes_id = row["supersedes_id"] or ""
+    except (IndexError, KeyError):
+        supersedes_id = ""
+    # v35 tamper-evidence column — tolerate rows from a pre-v35 DB / a row
+    # factory that strips columns. NULL (legacy, never hashed) normalises to
+    # "" on the meta so the dataclass carries a plain string; callers
+    # distinguish "unhashed" via the verify helper, not the meta.
+    try:
+        content_hash = row["content_hash"] or ""
+    except (IndexError, KeyError):
+        content_hash = ""
     return ReportMeta(
         report_id=row["report_id"],
         generated_at=row["generated_at"],
@@ -187,6 +239,9 @@ def _row_to_meta(row) -> ReportMeta:
         public_slug=public_slug,
         public_expires_at=public_expires_at,
         public_password_protected=public_password_protected,
+        report_version=report_version,
+        supersedes_id=supersedes_id,
+        content_hash=content_hash,
     )
 
 
@@ -222,6 +277,10 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
         # Write HTML
         file_path.write_text(html_content, encoding="utf-8")
         file_size_kb = round(file_path.stat().st_size / 1024, 2)
+        # Tamper-evidence (v35): hash the EXACT on-disk bytes — read them back
+        # rather than re-encoding html_content so the stored digest matches
+        # byte-for-byte what verify_report_integrity recomputes from the file.
+        content_hash = _sha256_file(file_path)
 
         meta = ReportMeta(
             report_id=report_id,
@@ -234,24 +293,40 @@ def save_report(html_content: str, report_obj: "Any") -> ReportMeta | None:
             data_quality=_attr(report_obj, "data_quality", "PARTIAL"),
             file_path=str(file_path.resolve()),
             file_size_kb=file_size_kb,
+            content_hash=content_hash,
         )
 
         uid = current_user_id()
         conn = get_connection()
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO report_history
-                  (report_id, generated_at, report_date, sentiment_label,
-                   sentiment_score, risk_level, signal_count, data_quality,
-                   file_path, file_size_kb, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (meta.report_id, meta.generated_at, meta.report_date,
-                 meta.sentiment_label, meta.sentiment_score, meta.risk_level,
-                 meta.signal_count, meta.data_quality, meta.file_path,
-                 meta.file_size_kb, uid),
+        # A fresh save is always version 1 with no predecessor — the v34
+        # lineage columns are written explicitly (rather than left to the
+        # DEFAULT) so the row shape is identical whether it was minted here
+        # or by :func:`amend_report`.
+        meta.report_version = 1
+        meta.supersedes_id = ""
+        _insert_report_row(conn, meta, uid, report_version=1, supersedes_id=None)
+
+        # Audit-log the generation. Placed AFTER the row was successfully
+        # inserted so we only emit an event when the report actually
+        # persisted — the failure path (returns None below) does not fire
+        # this hook. We pass ``user_id=uid`` (the same stamp the row got)
+        # rather than None so a scheduled save outside a Streamlit session
+        # records the resolved id consistently with the row it audits.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "generate_report",
+                entity_type="report",
+                entity_id=meta.report_id,
+                detail={
+                    "sentiment_label": meta.sentiment_label,
+                    "risk_level": meta.risk_level,
+                    "data_quality": meta.data_quality,
+                },
+                user_id=uid,
             )
+        except Exception:  # noqa: BLE001
+            pass
 
         # Prune any rows over MAX_REPORTS, oldest first. Also delete the
         # pruned files from disk.
@@ -346,7 +421,23 @@ def load_report_html(report_id: str, *, user_id: str | None = None) -> str | Non
         if not path.exists():
             logger.warning(f"load_report_html: file missing for {report_id}")
             return None
-        return path.read_text(encoding="utf-8")
+        html = path.read_text(encoding="utf-8")
+        # Audit-log the in-scope access. Placed AFTER the read succeeds so
+        # only genuine reads are recorded — the not-found / missing-file
+        # early returns above do not fire this hook. We pass ``user_id``
+        # through verbatim (``None`` resolves to the active session user)
+        # so the audit row attributes the access to whoever opened it.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "read_report",
+                entity_type="report",
+                entity_id=report_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return html
     except Exception as exc:
         logger.error(f"load_report_html failed for {report_id}: {exc}")
         return None
@@ -682,7 +773,26 @@ def load_public_report(slug: str, password: str | None = None) -> str | None:
         if not path.exists():
             logger.debug(f"load_public_report: file missing for slug {slug}")
             return None
-        return path.read_text(encoding="utf-8")
+        html = path.read_text(encoding="utf-8")
+        # Audit-log the public (anonymous) access. Placed AFTER every gate
+        # passes (slug found, not expired, password ok, file present) so a
+        # probe that fails any check does NOT generate an audit row. The
+        # accessing user is recorded honestly as ``""`` — a public-link
+        # viewer has no authenticated identity. The slug is NEVER written
+        # to the audit row (mirrors ``make_public``: a stolen audit row
+        # must not hand an attacker the working URL); ``password_protected``
+        # is the only payload field, which is what a review wants to see.
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "read_public_report",
+                entity_type="report",
+                detail={"password_protected": bool(stored_hash and stored_salt)},
+                user_id="",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return html
     except Exception as exc:
         logger.error(f"load_public_report failed for slug {slug!r}: {exc}")
         return None
@@ -811,8 +921,447 @@ def get_report_stats(*, user_id: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Immutable version / supersede-amend lineage (R119)
+# ---------------------------------------------------------------------------
+
+
+def amend_report(
+    original_report_id: str,
+    new_html: str,
+    *,
+    user_id: str | None = None,
+    reason: str = "",
+) -> str | None:
+    """Mint a NEW immutable report row that supersedes *original_report_id*.
+
+    A report is never edited in place. Instead an amendment writes a fresh
+    ``report_history`` row (new ``report_id``, new on-disk HTML file) whose
+    ``report_version`` is ``original.report_version + 1`` and whose
+    ``supersedes_id`` points back at *original_report_id*. The original row
+    is left COMPLETELY untouched, so the full version chain stays auditable
+    via :func:`version_chain`.
+
+    The new row inherits the original's metadata (sentiment, risk, etc.) —
+    an amendment is a re-issue of the SAME report with corrected/updated
+    content, not a freshly-computed report — except for ``generated_at``
+    (stamped now), the file path (new file), and the lineage columns. The
+    new row is owned by the same user as the original (per-user scoping is
+    honoured on the lookup), so an amendment can only be made within the
+    caller's own scope.
+
+    Args:
+        original_report_id: The report_id of the version being amended.
+        new_html:           The corrected/updated HTML for the new version.
+        user_id:            Optional explicit owner id. ``None`` resolves to
+                            the active Streamlit user via ``current_user_id``.
+        reason:             Free-form amendment reason, recorded on the audit
+                            event (best-effort). Not persisted as a column.
+
+    Returns:
+        The new report_id on success, or ``None`` if the original cannot be
+        found in scope or anything else goes wrong (never raises).
+    """
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+        conn = get_connection()
+        # Load the original row in-scope. A non-owner gets the same None
+        # return as an unknown report_id — no cross-scope amend.
+        orig = conn.execute(
+            f"SELECT * FROM report_history WHERE report_id = ? {scope_sql}",
+            (original_report_id, *scope_params),
+        ).fetchone()
+        if orig is None:
+            logger.debug(f"amend_report: original not found: {original_report_id}")
+            return None
+
+        orig_meta = _row_to_meta(orig)
+        # The row's owner stamp drives the new row's owner so the amendment
+        # lands in the same scope as the report it supersedes.
+        try:
+            orig_uid = orig["user_id"]
+        except (IndexError, KeyError):
+            orig_uid = uid
+
+        new_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{timestamp_str}_{new_id[:8]}.html"
+        file_path = REPORT_DIR / filename
+        file_path.write_text(new_html, encoding="utf-8")
+        file_size_kb = round(file_path.stat().st_size / 1024, 2)
+        # Tamper-evidence (v35): hash the EXACT on-disk bytes of the new
+        # version so the amendment is verifiable just like a fresh save.
+        content_hash = _sha256_file(file_path)
+
+        new_version = int(orig_meta.report_version) + 1
+        new_meta = ReportMeta(
+            report_id=new_id,
+            generated_at=now.isoformat(),
+            report_date=orig_meta.report_date,
+            sentiment_label=orig_meta.sentiment_label,
+            sentiment_score=orig_meta.sentiment_score,
+            risk_level=orig_meta.risk_level,
+            signal_count=orig_meta.signal_count,
+            data_quality=orig_meta.data_quality,
+            file_path=str(file_path.resolve()),
+            file_size_kb=file_size_kb,
+            report_version=new_version,
+            supersedes_id=original_report_id,
+            content_hash=content_hash,
+        )
+
+        # NB: we deliberately DO NOT touch the original row here — it stays
+        # immutable. We only INSERT the new version.
+        _insert_report_row(
+            conn, new_meta, orig_uid,
+            report_version=new_version,
+            supersedes_id=original_report_id,
+        )
+
+        # Audit-log the amendment (best-effort). The chain link + reason are
+        # the payload a reviewer wants ("v2 of X, because ...").
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "amend_report",
+                entity_type="report",
+                entity_id=new_id,
+                detail={
+                    "supersedes_id": original_report_id,
+                    "report_version": new_version,
+                    "reason": (reason or "")[:200],
+                },
+                user_id=orig_uid,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Pruning is intentionally NOT triggered here: an amendment is a
+        # deliberate audit action and we don't want the freshly-minted
+        # version (or its predecessor) silently pruned out from under a
+        # lineage the caller just created.
+        logger.info(
+            f"Report amended: {original_report_id} -> {new_id} "
+            f"(v{new_version})"
+        )
+        return new_id
+    except Exception as exc:
+        logger.error(f"amend_report failed for {original_report_id}: {exc}")
+        return None
+
+
+def reissue_report(
+    original_report_id: str,
+    *,
+    user_id: str | None = None,
+    reason: str = "",
+) -> str | None:
+    """Re-issue *original_report_id* as a NEW version with the SAME content.
+
+    A reissue is an :func:`amend_report` where the content is unchanged —
+    the same HTML is re-stamped as version N+1 (e.g. a re-fire of an
+    identical briefing under a new immutable id). It loads the original's
+    on-disk HTML and delegates to :func:`amend_report`, so the lineage
+    semantics (new row, ``supersedes_id`` link, original untouched) are
+    identical. If the original's HTML cannot be read, returns ``None``.
+
+    Returns the new report_id on success, or ``None`` on any failure
+    (never raises).
+    """
+    try:
+        html = load_report_html(original_report_id, user_id=user_id)
+        if html is None:
+            logger.debug(
+                f"reissue_report: could not load HTML for {original_report_id}"
+            )
+            return None
+        return amend_report(
+            original_report_id,
+            html,
+            user_id=user_id,
+            reason=reason or "reissue",
+        )
+    except Exception as exc:
+        logger.error(f"reissue_report failed for {original_report_id}: {exc}")
+        return None
+
+
+def version_chain(
+    report_id: str,
+    *,
+    user_id: str | None = None,
+) -> list[ReportMeta]:
+    """Return the full version lineage for *report_id*, oldest → newest.
+
+    Given any report in a chain, walks BOTH directions:
+      * backwards via ``supersedes_id`` (this row → its predecessor → ...)
+        until it reaches the original (NULL/empty ``supersedes_id``);
+      * forwards by finding the row whose ``supersedes_id`` equals each
+        known id, until no successor exists.
+
+    The returned list is ordered oldest-first (version 1 → latest). A v1
+    report with no supersedes and no successor yields a single-element
+    chain. Honours per-user scoping: only rows in the caller's scope are
+    traversed (a missing in-scope link simply truncates the walk).
+
+    Cycle-guarded: a ``supersedes_id`` that loops back to an already-seen
+    id terminates the walk rather than spinning forever. Returns an empty
+    list if *report_id* itself is not found in scope, or on any error
+    (never raises).
+    """
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        conn = get_connection()
+
+        def _fetch(rid: str):
+            return conn.execute(
+                f"SELECT * FROM report_history WHERE report_id = ? {scope_sql}",
+                (rid, *scope_params),
+            ).fetchone()
+
+        start = _fetch(report_id)
+        if start is None:
+            logger.debug(f"version_chain: report_id not found: {report_id}")
+            return []
+
+        seen: set[str] = set()
+        by_id: dict[str, ReportMeta] = {}
+
+        # Walk backwards (newest known → oldest) following supersedes_id.
+        cur = start
+        while cur is not None:
+            rid = cur["report_id"]
+            if rid in seen:  # cycle guard
+                break
+            seen.add(rid)
+            by_id[rid] = _row_to_meta(cur)
+            try:
+                prev_id = cur["supersedes_id"]
+            except (IndexError, KeyError):
+                prev_id = None
+            if not prev_id or prev_id in seen:
+                break
+            cur = _fetch(prev_id)
+
+        # Walk forwards (each known id → the row that supersedes it).
+        frontier = list(seen)
+        while frontier:
+            parent_id = frontier.pop()
+            succ = conn.execute(
+                f"SELECT * FROM report_history "
+                f"WHERE supersedes_id = ? {scope_sql}",
+                (parent_id, *scope_params),
+            ).fetchall()
+            for row in succ:
+                rid = row["report_id"]
+                if rid in seen:  # cycle guard
+                    continue
+                seen.add(rid)
+                by_id[rid] = _row_to_meta(row)
+                frontier.append(rid)
+
+        # Order oldest → newest: primarily by report_version, then by
+        # generated_at as a tie-breaker (defensive against duplicate
+        # version numbers in a malformed chain).
+        chain = sorted(
+            by_id.values(),
+            key=lambda m: (int(m.report_version), str(m.generated_at)),
+        )
+        return chain
+    except Exception as exc:
+        logger.error(f"version_chain failed for {report_id}: {exc}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Tamper-evidence: content-hash verification (R121, v35)
+# ---------------------------------------------------------------------------
+
+
+def verify_report_integrity(
+    report_id: str,
+    *,
+    user_id: str | None = None,
+) -> dict:
+    """Verify a report's on-disk bytes match the hash stored at issue time.
+
+    Loads the ``report_history`` row for *report_id* (in the caller's scope),
+    reads its stored ``content_hash``, recomputes the SHA-256 of the on-disk
+    file, and reports whether they match. This lets an auditor prove that a
+    distributed report's bytes are exactly what was issued.
+
+    Returns a dict::
+
+        {
+          "report_id":   <the id>,
+          "status":      "verified" | "tampered" | "missing" | "unhashed",
+          "stored_hash": <hex or "">,
+          "actual_hash": <hex or "">,
+        }
+
+    Status meanings:
+      * ``verified``  — the file exists and its hash equals the stored hash.
+      * ``tampered``  — the file exists but its hash DIFFERS from the stored
+        hash (the on-disk bytes diverged from what was issued). A best-effort
+        ``record_audit`` mismatch event is emitted.
+      * ``missing``   — the report is unknown in scope, OR its on-disk file is
+        gone / unreadable (cannot recompute → cannot verify).
+      * ``unhashed``  — the row exists and the file exists, but the stored
+        ``content_hash`` is NULL/empty (a legacy pre-v35 row whose bytes were
+        never hashed). This is HONEST: we can't verify it, but its absence is
+        not itself a tamper signal, so it is never reported as ``tampered``.
+
+    Honours per-user scoping exactly like :func:`load_report_html`: a report
+    outside the caller's scope is indistinguishable from an unknown id and
+    returns ``missing``. NEVER raises — any unexpected error degrades to
+    ``missing`` so a verify call can never break the caller (e.g. a tab
+    render that badges each row).
+    """
+    result = {
+        "report_id": report_id,
+        "status": "missing",
+        "stored_hash": "",
+        "actual_hash": "",
+    }
+    try:
+        from state.db import get_connection
+        from state.user_scope import current_user_id, scope_filter_sql
+
+        uid = current_user_id() if user_id is None else user_id
+        scope_sql, scope_params = scope_filter_sql(uid)
+
+        conn = get_connection()
+        row = conn.execute(
+            f"SELECT file_path, content_hash FROM report_history "
+            f"WHERE report_id = ? {scope_sql}",
+            (report_id, *scope_params),
+        ).fetchone()
+        if row is None:
+            # Unknown in scope — indistinguishable from a deleted report.
+            return result
+
+        try:
+            stored_hash = row["content_hash"] or ""
+        except (IndexError, KeyError):
+            stored_hash = ""
+        result["stored_hash"] = stored_hash
+
+        path = Path(row["file_path"])
+        if not path.exists():
+            # File gone — cannot recompute, so cannot verify. "missing" rather
+            # than "tampered": we have no on-disk bytes to compare at all.
+            result["status"] = "missing"
+            return result
+
+        # Legacy row whose bytes were never hashed. Honest: report "unhashed"
+        # (cannot verify), never "tampered".
+        if not stored_hash:
+            result["status"] = "unhashed"
+            return result
+
+        try:
+            actual_hash = _sha256_file(path)
+        except Exception as exc:  # noqa: BLE001 — unreadable file
+            logger.warning(
+                f"verify_report_integrity: could not read file for "
+                f"{report_id}: {exc}"
+            )
+            result["status"] = "missing"
+            return result
+        result["actual_hash"] = actual_hash
+
+        if hmac.compare_digest(actual_hash, stored_hash):
+            result["status"] = "verified"
+            return result
+
+        # Mismatch — the on-disk bytes diverged from what was issued. Audit
+        # it (best-effort; an audit-write failure must not change the verdict).
+        result["status"] = "tampered"
+        try:
+            from auth.audit import record_audit
+            record_audit(
+                "report_integrity_mismatch",
+                entity_type="report",
+                entity_id=report_id,
+                detail={
+                    "stored_hash": stored_hash,
+                    "actual_hash": actual_hash,
+                },
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            f"verify_report_integrity: TAMPERED report {report_id} "
+            f"(stored {stored_hash[:12]}… != actual {actual_hash[:12]}…)"
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — never raise from verify
+        logger.error(f"verify_report_integrity failed for {report_id}: {exc}")
+        return result
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _insert_report_row(
+    conn,
+    meta: "ReportMeta",
+    uid: str,
+    *,
+    report_version: int = 1,
+    supersedes_id: "str | None" = None,
+) -> None:
+    """Insert one fully-formed report row, including the v34 lineage columns.
+
+    Shared by :func:`save_report` (fresh report → version 1, no
+    predecessor) and :func:`amend_report` (mints version N+1 linked to its
+    predecessor via ``supersedes_id``). The lineage columns are written
+    explicitly so every row has an identical shape regardless of which
+    path created it.
+
+    ``supersedes_id`` is stored as SQL NULL for an original report (the
+    "head of chain" marker) and as the predecessor's ``report_id`` for an
+    amendment. The write runs inside ``with conn:`` so it is atomic.
+
+    The v35 ``content_hash`` (SHA-256 of the issued bytes) is taken from the
+    meta — both call sites (:func:`save_report` and :func:`amend_report`)
+    populate it from the EXACT on-disk bytes before inserting — so every row
+    minted here is tamper-evidence-stamped at issue. An empty string is
+    stored as SQL NULL so it joins the legacy "unhashed" bucket rather than
+    masquerading as a real (empty) hash.
+    """
+    content_hash = (getattr(meta, "content_hash", "") or "") or None
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO report_history
+              (report_id, generated_at, report_date, sentiment_label,
+               sentiment_score, risk_level, signal_count, data_quality,
+               file_path, file_size_kb, user_id,
+               report_version, supersedes_id, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (meta.report_id, meta.generated_at, meta.report_date,
+             meta.sentiment_label, meta.sentiment_score, meta.risk_level,
+             meta.signal_count, meta.data_quality, meta.file_path,
+             meta.file_size_kb, uid,
+             int(report_version), supersedes_id, content_hash),
+        )
+
 
 def _prune_old_reports() -> None:
     """Keep only the MAX_REPORTS most recent rows; delete pruned files."""

@@ -1,0 +1,140 @@
+{
+  "description": "Per-metric, direction-aware regression baseline (R027). Each entry pins a validator's HEADLINE metric; --drift-strict fails CI when the current value regresses past 'tolerance' in the worsening direction. Improvements never breach. Re-mint with `python -m tools.backtests --update-headline-baseline` after an intentional model change.",
+  "metrics": {
+    "Capacity-Demand Persistence :: pass_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "pass_rate",
+      "tolerance": 0.05,
+      "validator": "Capacity-Demand Persistence"
+    },
+    "Cargo-Flow JSD Stability :: pass_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "pass_rate",
+      "tolerance": 0.05,
+      "validator": "Cargo-Flow JSD Stability"
+    },
+    "Company Supply Risk Stability :: overall_mean_stability": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "overall_mean_stability",
+      "tolerance": 0.05,
+      "validator": "Company Supply Risk Stability"
+    },
+    "Disruption Forecast Accuracy :: mean_mae_30d": {
+      "baseline": 0.0386,
+      "direction": "lower_better",
+      "metric": "mean_mae_30d",
+      "tolerance": 0.02,
+      "validator": "Disruption Forecast Accuracy"
+    },
+    "Disruption Forecast Accuracy :: mean_sa_30d": {
+      "baseline": 0.9167,
+      "direction": "higher_better",
+      "metric": "mean_sa_30d",
+      "tolerance": 0.05,
+      "validator": "Disruption Forecast Accuracy"
+    },
+    "ETA Predictor Accuracy :: delay_mae": {
+      "baseline": 0.6944,
+      "direction": "lower_better",
+      "metric": "delay_mae",
+      "tolerance": 0.3,
+      "validator": "ETA Predictor Accuracy"
+    },
+    "ETA Predictor Accuracy :: delay_sign_agreement": {
+      "baseline": 0.9875,
+      "direction": "higher_better",
+      "metric": "delay_sign_agreement",
+      "tolerance": 0.05,
+      "validator": "ETA Predictor Accuracy"
+    },
+    "Graph Centrality Dominance :: pass_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "pass_rate",
+      "tolerance": 0.05,
+      "validator": "Graph Centrality Dominance"
+    },
+    "Historical Event Replay :: pass_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "pass_rate",
+      "tolerance": 0.05,
+      "validator": "Historical Event Replay"
+    },
+    "Leading Indicators Calibration :: spread_bullish_vs_bearish": {
+      "baseline": 0.0407,
+      "direction": "higher_better",
+      "metric": "spread_bullish_vs_bearish",
+      "tolerance": 0.02,
+      "validator": "Leading Indicators Calibration"
+    },
+    "Momentum Ranker Ladder :: spread_strong_vs_weak": {
+      "baseline": 0.341,
+      "direction": "higher_better",
+      "metric": "spread_strong_vs_weak",
+      "tolerance": 0.05,
+      "validator": "Momentum Ranker Ladder"
+    },
+    "News Sentiment Calibration :: spread_bullish_vs_bearish": {
+      "baseline": 0.0385,
+      "direction": "higher_better",
+      "metric": "spread_bullish_vs_bearish",
+      "tolerance": 0.02,
+      "validator": "News Sentiment Calibration"
+    },
+    "Port Supply Lines Stability :: overall_mean_stability": {
+      "baseline": 0.998,
+      "direction": "higher_better",
+      "metric": "overall_mean_stability",
+      "tolerance": 0.05,
+      "validator": "Port Supply Lines Stability"
+    },
+    "SCHI Dimension Predictiveness :: best_rate": {
+      "baseline": 0.7203,
+      "direction": "higher_better",
+      "metric": "best_rate",
+      "tolerance": 0.05,
+      "validator": "SCHI Dimension Predictiveness"
+    },
+    "SSI Component Predictiveness :: best_rate": {
+      "baseline": 0.8051,
+      "direction": "higher_better",
+      "metric": "best_rate",
+      "tolerance": 0.05,
+      "validator": "SSI Component Predictiveness"
+    },
+    "SSI Lag-Correlation Recovery :: recovery_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "recovery_rate",
+      "tolerance": 0.05,
+      "validator": "SSI Lag-Correlation Recovery"
+    },
+    "Snapshot Diff Anomaly Recovery :: mean_recovery_rate": {
+      "baseline": 0.6957,
+      "direction": "higher_better",
+      "metric": "mean_recovery_rate",
+      "tolerance": 0.05,
+      "validator": "Snapshot Diff Anomaly Recovery"
+    },
+    "Spillover Graph Recall :: pass_rate": {
+      "baseline": 1.0,
+      "direction": "higher_better",
+      "metric": "pass_rate",
+      "tolerance": 0.05,
+      "validator": "Spillover Graph Recall"
+    },
+    "Vulnerability Scorer Monotonicity :: spread_critical_vs_low": {
+      "baseline": 0.6178,
+      "direction": "higher_better",
+      "metric": "spread_critical_vs_low",
+      "tolerance": 0.05,
+      "validator": "Vulnerability Scorer Monotonicity"
+    }
+  },
+  "n_metrics": 19,
+  "schema": "ship.backtest.headline-baseline/1"
+}

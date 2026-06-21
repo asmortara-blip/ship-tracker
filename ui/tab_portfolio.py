@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime
-import random
 
 import numpy as np
 import pandas as pd
@@ -64,30 +63,8 @@ _DEFAULT_POSITIONS = [
     {"ticker": "HAFNI", "sector": "Tanker",        "shares": 1000,  "avg_cost": 7.85,   "beta": 1.55},
 ]
 
-# Mock current prices (realistic for 2026 shipping names)
-_MOCK_PRICES = {
-    "ZIM":   19.82,
-    "MATX":  128.45,
-    "DAC":   81.60,
-    "SBLK":  14.35,
-    "GOGL":  12.80,
-    "STNG":  55.90,
-    "GSL":   24.75,
-    "HAFNI": 8.42,
-}
-
-# Mock day change pcts
-_MOCK_DAY_CHANGE = {
-    "ZIM":   +2.14,
-    "MATX":  +0.78,
-    "DAC":   +1.35,
-    "SBLK":  -1.82,
-    "GOGL":  +3.21,
-    "STNG":  +0.45,
-    "GSL":   -0.62,
-    "HAFNI": +2.88,
-}
-
+# Prices and day-changes come from REAL stock_feed closes (processing.book_pnl);
+# unpriced tickers render NaN / 0.0 rather than a fabricated quote.
 
 
 # ── Cell formatters for wsj_market_table() ────────────────────────────────
@@ -137,30 +114,71 @@ def _color(v: float) -> str:
 
 
 def _get_price(ticker: str, stock_data) -> float:
-    """Return current price from stock_data or fall back to mock."""
+    """Latest REAL close from stock_data, or NaN when unavailable (no mock)."""
     try:
-        if stock_data is not None:
-            if isinstance(stock_data, dict) and ticker in stock_data:
-                row = stock_data[ticker]
-                if hasattr(row, "get"):
-                    price = row.get("price") or row.get("close") or row.get("last")
-                    if price:
-                        return float(price)
-            if isinstance(stock_data, pd.DataFrame) and ticker in stock_data.columns:
-                val = stock_data[ticker].dropna().iloc[-1]
-                return float(val)
+        from processing.book_pnl import _latest_close
+        last = _latest_close(stock_data, ticker)
+        if last is not None:
+            return float(last)
+        # Wide-frame shape (some callers pass a columns-are-tickers DataFrame).
+        if isinstance(stock_data, pd.DataFrame) and ticker in stock_data.columns:
+            val = stock_data[ticker].dropna().iloc[-1]
+            return float(val)
     except Exception:
         pass
-    return _MOCK_PRICES.get(ticker, 20.0 + random.uniform(-2, 2))
+    return float("nan")
 
 
-def _get_day_change_pct(ticker: str) -> float:
-    return _MOCK_DAY_CHANGE.get(ticker, random.uniform(-3.5, 3.5))
+def _get_day_change_pct(ticker: str, stock_data) -> float:
+    """Real 1-day % change from the last two closes; 0.0 when unavailable."""
+    try:
+        from processing.book_pnl import day_change_pct
+        d = day_change_pct(ticker, stock_data)
+        return float(d) if d is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 def _init_positions() -> None:
-    if "portfolio_positions" not in st.session_state:
-        st.session_state["portfolio_positions"] = [dict(p) for p in _DEFAULT_POSITIONS]
+    """Seed the session book from the durable per-user ledger (schema v29).
+
+    A logged-in user's saved positions load from the DB; a brand-new user (or
+    the session-less CLI/demo path) falls back to the illustrative default
+    book, which is NOT persisted until they actually edit it.
+    """
+    if "portfolio_positions" in st.session_state:
+        return
+    loaded: list[dict] = []
+    try:
+        from state.user_scope import current_user_id
+        from state import positions as pos_store
+        uid = current_user_id()
+        if uid:
+            loaded = pos_store.load_positions(uid)
+    except Exception:
+        loaded = []
+    st.session_state["portfolio_positions"] = (
+        loaded if loaded else [dict(p) for p in _DEFAULT_POSITIONS]
+    )
+
+
+def _persist_positions() -> None:
+    """Persist the current session book to the durable per-user ledger.
+
+    No-op without a logged-in user (the session-less CLI/demo path keeps the
+    legacy in-memory behaviour). Failures are swallowed so a storage blip
+    never breaks the tab.
+    """
+    try:
+        from state.user_scope import current_user_id
+        from state import positions as pos_store
+        uid = current_user_id()
+        if not uid:
+            return
+        pos_store.replace_positions(uid, st.session_state.get("portfolio_positions", []))
+    except Exception:
+        from loguru import logger
+        logger.exception("tab_portfolio: persist_positions failed")
 
 
 # ---------------------------------------------------------------------------
@@ -184,13 +202,13 @@ def _build_snapshot(positions: list[dict], stock_data) -> pd.DataFrame:
         sector  = pos.get("sector", "Unknown")
         shares  = float(pos.get("shares", 0))
         avg_cost = float(pos.get("avg_cost", 0))
-        beta    = float(pos.get("beta", 1.0))
+        beta    = float(pos.get("beta") or 1.0)
         price   = _get_price(ticker, stock_data)
         mkt_val = shares * price
         cost_basis = shares * avg_cost
         pnl_dollar = mkt_val - cost_basis
         pnl_pct    = (pnl_dollar / cost_basis * 100) if cost_basis > 0 else 0.0
-        day_chg    = _get_day_change_pct(ticker)
+        day_chg    = _get_day_change_pct(ticker, stock_data)
         day_pnl    = mkt_val * day_chg / 100
         rows.append({
             "Ticker":       ticker,
@@ -281,6 +299,7 @@ def _render_add_position_form() -> None:
                         })
                         st.success(f"Added {ticker_in} — {shares_in} shares @ ${cost_in:.2f}")
                     st.session_state["portfolio_positions"] = positions
+                    _persist_positions()
                     st.rerun()
             except Exception as e:
                 st.error(f"Error adding position: {e}")
@@ -294,6 +313,7 @@ def _render_add_position_form() -> None:
                 st.session_state["portfolio_positions"] = [
                     p for p in positions if p["ticker"] != rem_ticker
                 ]
+                _persist_positions()
                 st.success(f"Removed {rem_ticker}")
                 st.rerun()
 
@@ -322,9 +342,10 @@ def _render_editorial_commentary(df: pd.DataFrame) -> None:
             (df["Beta"] * df["Weight %"] / 100.0).sum()
         ) if "Weight %" in df.columns else 1.0
 
-        # Top holding by market value + best/worst single-day mover.
-        top_idx = df["Market Value"].idxmax()
-        top = df.loc[top_idx]
+        # Top holding by market value + best/worst single-day mover. Guard the
+        # all-unpriced case (every Market Value NaN) — idxmax would raise.
+        _mv = df["Market Value"]
+        top = df.loc[_mv.idxmax()] if _mv.notna().any() else df.iloc[0]
         sorted_day = df.sort_values("Day Chg %", ascending=False)
         best = sorted_day.iloc[0]
         worst = sorted_day.iloc[-1]
@@ -498,49 +519,47 @@ def _render_composition_chart(df: pd.DataFrame) -> None:
         logger.warning(f"composition chart error: {e}")
 
 
-def _render_performance_chart(df: pd.DataFrame) -> None:
-    """90-day simulated portfolio NAV vs shipping index."""
+def _render_performance_chart(positions: list[dict], stock_data) -> None:
+    """Portfolio NAV from REAL closes — current holdings marked to history.
+
+    Values today's book at each past real close (base=100). This is a
+    mark-to-history curve, NOT a replayed trading path (entries/exits are not
+    reconstructed). Empty-states honestly when no priced holdings exist.
+    """
     try:
-        rng = np.random.default_rng(42)
-        days = 90
-        dates = pd.date_range(end=datetime.date.today(), periods=days, freq="B")
-
-        # Simulate correlated returns — instance-scoped RNG, not global
-        port_ret   = rng.normal(0.0008, 0.018, days)
-        index_ret  = rng.normal(0.0003, 0.020, days)
-
-        # Add some correlation + trending
-        port_ret   = port_ret + 0.0005
-        index_ret  = index_ret - 0.0002
-
-        nav_port   = 100 * np.cumprod(1 + port_ret)
-        nav_index  = 100 * np.cumprod(1 + index_ret)
+        from processing.book_pnl import nav_series
+        nav = nav_series(positions, stock_data, days=90, base=100.0)
+        if nav is None or nav.empty:
+            st.info(
+                "Portfolio NAV needs live price history for the held tickers — "
+                "unavailable right now."
+            )
+            return
 
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(
-            x=dates, y=nav_port,
-            name="Portfolio",
+            x=nav.index, y=nav.values,
+            name="Portfolio (mark-to-history)",
             line=dict(color=C_ACCENT, width=2.5),
             fill="tozeroy",
             fillcolor="rgba(53,114,176,0.06)",
             hovertemplate="<b>Portfolio</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
         ))
-
-        fig.add_trace(go.Scatter(
-            x=dates, y=nav_index,
-            name="Shipping Index (BDI proxy)",
-            line=dict(color=C_MOD, width=1.8, dash="dot"),
-            hovertemplate="<b>Index</b><br>%{x|%b %d}<br>NAV: %{y:.1f}<extra></extra>",
-        ))
-
-        apply_dark_layout(fig, title="Portfolio NAV vs. Shipping Index (90-Day)", height=360)
+        apply_dark_layout(
+            fig,
+            title="Portfolio NAV — current holdings marked to historical closes",
+            height=360,
+        )
         fig.update_layout(yaxis={"title": dict(text="Indexed (Base=100)", font=dict(size=11, color=C_TEXT3))})
 
         st.plotly_chart(fig, use_container_width=True, key="portfolio_nav")
         st.markdown(source_footer([
-            {"name": "Simulated 90-day NAV path", "kind": "modeled", "quality": "demo"},
+            {"name": "Holdings marked to real historical closes (yfinance)", "kind": "real", "quality": "live"},
         ]), unsafe_allow_html=True)
+        st.caption(
+            "Mark-to-history: today's holdings valued at each past close — "
+            "not a realized trading path."
+        )
     except Exception as e:
         logger.warning(f"performance chart error: {e}")
 
@@ -654,51 +673,404 @@ def _render_risk_return_scatter(df: pd.DataFrame) -> None:
     )
 
 
-def _render_risk_metrics(df: pd.DataFrame) -> None:
-    """VaR, Sharpe, Max Drawdown, BDI correlation panel."""
+def _render_risk_metrics(df: pd.DataFrame, stock_data=None, macro_data=None) -> None:
+    """VaR / Sharpe / Max Drawdown / BDI correlation from the REAL weighted book.
+
+    R008 — replaces the former ``rng.normal`` 252-day Monte-Carlo panel (which
+    fabricated the whole risk read, including a ~0.6 BDI correlation). Now built
+    from ``book_pnl.returns_panel`` over the book's tickers, weighted by real
+    marked weights, with a LABELED synthetic fallback only when prices are dark.
+    The BDI correlation is REAL (from macro_data) or honestly ``n/a`` — never
+    fabricated.
+    """
     try:
-        rng = np.random.default_rng(7)
-        n = 252
-        port_ret = rng.normal(0.0008, 0.018, n)
+        if df is None or df.empty or "Ticker" not in df.columns:
+            return
+        from processing import risk_lab
+        from processing.book_exposure import book_weights
+        from processing.book_pnl import returns_panel
 
-        # VaR 95% 1-day
-        var_95 = float(np.percentile(port_ret, 5))
-        total_val = df["Market Value"].sum() if not df.empty else 500_000
-        var_dollar = abs(var_95) * total_val
+        positions = st.session_state.get("portfolio_positions", [])
+        tickers = [str(t) for t in df["Ticker"].tolist()]
+        book_mv = float(df["Market Value"].sum()) or 500_000.0
 
-        # Sharpe (annualised, rf=4.5%)
+        real = returns_panel(stock_data or {}, tickers)
+        panel_is_real = not real.empty
+        if panel_is_real:
+            returns_df = real
+            w = book_weights(positions, stock_data or {})
+            # Restrict to surviving columns (returns_panel drops thin names) and
+            # renormalise so the weights sum to 1 over the panel.
+            w = {t: w[t] for t in returns_df.columns if t in w}
+            s = sum(w.values())
+            w = ({t: v / s for t, v in w.items()} if s > 0
+                 else {t: 1.0 / len(returns_df.columns) for t in returns_df.columns})
+        else:
+            returns_df = _synth_returns_panel(tickers or ["ZIM"])
+            w = {t: 1.0 / len(returns_df.columns) for t in returns_df.columns}
+        if returns_df.empty:
+            return
+
+        # EWMA — the platform's live VaR method (vol-adaptive, coverage-tested),
+        # consistent with sized_book_var / persisted_book_risk / the Risk-Lab tab.
+        book_var = risk_lab.portfolio_var(
+            returns_df, w, confidence=0.95,
+            portfolio_value=book_mv, method="ewma")
+
+        # Weighted book-return series for Sharpe / MaxDD / BDI correlation.
+        cols = [t for t in returns_df.columns if t in w]
+        w_vec = np.array([w[t] for t in cols])
+        port_ret = pd.Series(
+            returns_df[cols].to_numpy() @ w_vec, index=returns_df.index)
         rf_daily = 0.045 / 252
-        sharpe = (port_ret.mean() - rf_daily) / port_ret.std() * np.sqrt(252)
+        std = float(port_ret.std())
+        sharpe = (((float(port_ret.mean()) - rf_daily) / std) * np.sqrt(252)
+                  if std > 0 else 0.0)
+        nav = (1.0 + port_ret).cumprod()
+        max_dd = (float(((nav - nav.cummax()) / nav.cummax()).min()) * 100
+                  if len(nav) else 0.0)
 
-        # Max drawdown
-        nav = np.cumprod(1 + port_ret)
-        peak = np.maximum.accumulate(nav)
-        drawdown = (nav - peak) / peak
-        max_dd = float(drawdown.min()) * 100
+        # REAL BDI correlation, or an honest "n/a" — never the old 0.6 fabrication.
+        # The BDI level is date-indexed and reindexed onto the (daily) return
+        # dates before correlating changes, so a coarser BDI cadence still aligns
+        # instead of silently producing an empty join (-> "n/a forever").
+        bdi_corr_txt, bdi_sub = "n/a", "BDI unavailable"
+        try:
+            bdi_level = _bdi_level_series(macro_data)
+            if (bdi_level is not None and len(bdi_level) > 5
+                    and isinstance(port_ret.index, pd.DatetimeIndex)):
+                bdi_ret = bdi_level.reindex(port_ret.index, method="ffill").pct_change()
+                aligned = pd.concat([port_ret, bdi_ret], axis=1).dropna()
+                if len(aligned) >= 10:
+                    c = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+                    if np.isfinite(c):
+                        bdi_corr_txt, bdi_sub = f"{c:.2f}", "Baltic Dry Index (real)"
+        except Exception:
+            pass
 
-        # BDI correlation (simulated) — same instance RNG continues
-        bdi_ret = 0.6 * port_ret + rng.normal(0, 0.012, n)
-        bdi_corr = float(np.corrcoef(port_ret, bdi_ret)[0, 1])
-
+        var_pct = abs(book_var.var_pct) * 100
         sharpe_color = C_HIGH if sharpe > 1.0 else (C_MOD if sharpe > 0 else C_LOW)
-        dd_color     = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
-
-        section_header("Risk Metrics", "VaR, Sharpe, drawdown, and BDI correlation — trailing 252 days")
+        dd_color = C_LOW if max_dd < -15 else (C_MOD if max_dd < -8 else C_HIGH)
+        window = len(returns_df)
+        sub = (f"real weighted book returns, {window}d" if panel_is_real
+               else f"synthetic panel — prices dark, {window}d")
+        section_header("Risk Metrics", f"VaR, Sharpe, drawdown, BDI correlation — {sub}")
         metric_card_row([
-            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(var_dollar),
-             "accent": C_LOW,         "sublabel": f"{abs(var_95)*100:.2f}% of portfolio"},
+            {"label": "VaR (95%, 1-Day)", "value": _fmt_dollar_abs(book_var.var_dollar),
+             "accent": C_LOW,        "sublabel": f"{var_pct:.2f}% of book"},
             {"label": "Sharpe Ratio",    "value": f"{sharpe:.2f}",
-             "accent": sharpe_color,   "sublabel": "Annualised, rf=4.5%"},
+             "accent": sharpe_color,  "sublabel": "Annualised, rf=4.5%"},
             {"label": "Max Drawdown",    "value": f"{max_dd:.1f}%",
-             "accent": dd_color,       "sublabel": "Trailing 252 days"},
-            {"label": "Corr. to BDI",    "value": f"{bdi_corr:.2f}",
-             "accent": C_ACCENT,       "sublabel": "Baltic Dry Index"},
+             "accent": dd_color,      "sublabel": f"over {window}-day window"},
+            {"label": "Corr. to BDI",    "value": bdi_corr_txt,
+             "accent": C_ACCENT,      "sublabel": bdi_sub},
         ], columns=4)
         st.markdown(source_footer([
-            {"name": "Simulated daily P&L (252-day Monte Carlo)", "kind": "modeled", "quality": "demo"},
+            DataSource.live("Real weighted book returns from cached closes; BDI from FRED")
+            if panel_is_real else
+            DataSource.demo("Synthetic returns panel (prices dark — labeled demo)")
         ]), unsafe_allow_html=True)
     except Exception as e:
         logger.warning(f"risk metrics error: {e}")
+
+
+def _render_persisted_book_risk(stock_data=None, macro_data=None, insights=None) -> None:
+    """Live-book VaR/ES + per-scenario stress on the PERSISTED book (R125).
+
+    The OMS-risk-desk view: load the current user's DURABLE book from
+    ``state.positions`` (NOT the volatile session list, and NOT a hardcoded
+    equal-weight universe like the Risk Lab tab), then run
+    ``risk_lab.portfolio_var`` over its REAL marked weights × the REAL returns
+    panel, plus ``stress_test_all_scenarios(weights)`` — every BUILTIN scenario's
+    impact on the live book.
+
+    Distinct from ``_render_risk_metrics`` (R008): that overlays the SESSION
+    book; this is the PERSISTED ledger and adds the scenario-stress table the
+    Portfolio tab never had. Honest empty-state for a session-less / empty book
+    or dark prices — no rng.normal.
+    """
+    try:
+        from processing.persisted_book_risk import (
+            load_persisted_positions,
+            persisted_book_risk,
+            persisted_book_stress_var,
+        )
+        from state.user_scope import current_user_id
+
+        uid = current_user_id()
+        positions = load_persisted_positions(uid)
+
+        section_header(
+            "Persisted-Book Risk",
+            "Your DURABLE saved book (state.positions) driving live VaR and a "
+            "per-scenario stress test — the view a risk desk runs each morning. "
+            "Distinct from the session-book risk strip above.",
+        )
+
+        if not positions:
+            st.info(
+                "No persisted book yet — sign in and save positions (the Add/Edit "
+                "form above persists to your durable ledger). The session demo "
+                "book is shown in the risk strip above, but is not stressed here."
+            )
+            return
+
+        risk = persisted_book_risk(positions, stock_data or {})
+
+        # ── Headline cards: book VaR/CVaR (sized by priced MV) + worst scenario.
+        var = risk.var
+        if var is not None and var.n_observations > 0:
+            var_pct = abs(var.var_pct) * 100
+            cvar_pct = abs(var.cvar_pct) * 100
+            var_val = f"{_fmt_dollar_abs(var.var_dollar)}" if risk.market_value > 0 \
+                else f"{var_pct:.2f}%"
+            var_sub = (f"{var_pct:.2f}% of book · {var.n_observations}d panel"
+                       if risk.market_value > 0
+                       else f"{var.n_observations}d real panel · book unpriced")
+            cvar_val = f"{_fmt_dollar_abs(var.cvar_dollar)}" if risk.market_value > 0 \
+                else f"{cvar_pct:.2f}%"
+        else:
+            var_val, var_sub, cvar_val = "n/a", "real returns panel unavailable", "n/a"
+
+        worst = risk.scenarios[0] if risk.scenarios else None
+        worst_val = f"{worst.pnl_pct*100:+.2f}%" if worst else "n/a"
+        worst_sub = (f"{worst.scenario_name}" if worst else "no scenarios loaded")
+        worst_color = (C_LOW if worst and worst.pnl_pct < 0
+                       else (C_HIGH if worst and worst.pnl_pct > 0 else C_TEXT3))
+
+        metric_card_row([
+            {"label": "Book VaR (95%, 1-Day)", "value": var_val,
+             "accent": C_LOW, "sublabel": var_sub},
+            {"label": "Book CVaR (95%)", "value": cvar_val,
+             "accent": C_LOW, "sublabel": "expected tail loss"},
+            {"label": "Priced Book Value", "value": _fmt_dollar_abs(risk.market_value),
+             "accent": C_TEXT, "sublabel": f"{risk.n_priced} of {risk.n_positions} lots priced"},
+            {"label": "Worst Scenario", "value": worst_val,
+             "accent": worst_color, "sublabel": worst_sub},
+        ], columns=4)
+
+        # ── Per-scenario stress table on the live book (worst-loss-first). ────
+        if risk.scenarios:
+            headers = ["Scenario", "Category", "P&L %", "P&L $",
+                       "Book After", "Top Contributor"]
+            rows: list[list[str]] = []
+            for r in risk.scenarios:
+                if r.per_ticker_pnl:
+                    top_ticker, top_pnl = max(
+                        r.per_ticker_pnl.items(), key=lambda kv: abs(kv[1]))
+                    top_str = f"{top_ticker} ({_fmt_dollar(top_pnl)})"
+                else:
+                    top_str = "—"
+                pnl_color = (C_HIGH if r.pnl_pct > 0
+                             else (C_LOW if r.pnl_pct < 0 else C_TEXT2))
+                cat_color = {
+                    "Geopolitical": C_LOW, "Weather": C_MOD, "Macro": C_ACCENT,
+                    "Demand": "#7c6eaf", "Operational": C_TEXT2,
+                }.get(r.category, C_TEXT2)
+                rows.append([
+                    _sans(r.scenario_name, color=C_TEXT, weight=600),
+                    badge(r.category, color=cat_color),
+                    _mono(f"{r.pnl_pct*100:+.2f}%", color=pnl_color),
+                    _mono(_fmt_dollar(r.pnl_dollar), color=pnl_color),
+                    _mono(_fmt_dollar_abs(r.portfolio_value_after), color=C_TEXT2),
+                    _sans(top_str, color=C_TEXT2),
+                ])
+            wsj_market_table(headers, rows)
+
+            # Horizontal P&L bar — worst losses at the top.
+            fig = go.Figure(go.Bar(
+                x=[r.pnl_pct * 100 for r in risk.scenarios],
+                y=[r.scenario_name for r in risk.scenarios],
+                orientation="h",
+                marker_color=[C_LOW if r.pnl_pct < 0 else C_HIGH
+                              for r in risk.scenarios],
+                text=[f"{r.pnl_pct*100:+.1f}%" for r in risk.scenarios],
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>Book P&L: %{x:+.2f}%<extra></extra>",
+            ))
+            apply_dark_layout(
+                fig, title="Scenario P&L on the persisted book (% of book)",
+                height=max(260, 28 * len(risk.scenarios) + 80),
+                showlegend=False,
+            )
+            fig.update_layout(
+                xaxis={"ticksuffix": "%"},
+                yaxis={"autorange": "reversed"},
+                margin={"l": 12, "r": 80, "t": 46, "b": 30},
+            )
+            st.plotly_chart(fig, use_container_width=True, key="persisted_book_stress")
+
+        # ── Cascade Stress-VaR/ES: live disruption × the REAL marked book ─────
+        # The platform's coherent cascade-grounded Monte-Carlo Stress-VaR (R009)
+        # is otherwise run only on a hardcoded equal-weight universe (Risk Lab).
+        # Here it runs on the user's REAL book under the live cascade shock, with
+        # exact per-name Euler ES — the missing half no scenario multiplier shows.
+        try:
+            ideas = []
+            try:
+                from processing.disruption_cascade import score_equity_ideas
+                from processing.exposure_matrix import build_exposure_matrix
+                from processing.shipping_stress_index import compute_shipping_stress
+                stress = compute_shipping_stress({}, macro_data or {}, [], [])
+                exposure = build_exposure_matrix(stock_data or {})
+                ideas = score_equity_ideas(stress, exposure, stock_data or {}, insights)
+            except Exception as ie:
+                logger.debug(f"persisted stress-var ideas unavailable: {ie}")
+
+            sv = persisted_book_stress_var(positions, ideas, stock_data or {})
+            if sv is not None and sv.basis != "empty":
+                st.markdown(
+                    '<div class="sub-section-header">Cascade Stress-VaR '
+                    '— live disruption × your book</div>',
+                    unsafe_allow_html=True,
+                )
+                n_shocked = sum(1 for v in sv.shocks_pct.values() if abs(v) > 1e-9)
+                var_acc = C_LOW if sv.var_pct < 0 else C_HIGH
+                es_acc = C_LOW if sv.es_pct < 0 else C_HIGH
+                mean_acc = (C_LOW if sv.mean_pnl_pct < 0
+                            else (C_HIGH if sv.mean_pnl_pct > 0 else C_TEXT3))
+                metric_card_row([
+                    {"label": f"Stress-VaR ({sv.confidence*100:.0f}%, {sv.horizon_days}d)",
+                     "value": f"{sv.var_pct*100:+.2f}%", "accent": var_acc,
+                     "sublabel": f"{_fmt_dollar(sv.var_dollar)} · {sv.basis}"},
+                    {"label": "Stress-ES (tail mean)",
+                     "value": f"{sv.es_pct*100:+.2f}%", "accent": es_acc,
+                     "sublabel": f"{_fmt_dollar(sv.es_dollar)} expected tail"},
+                    {"label": "Expected P&L under shock",
+                     "value": f"{sv.mean_pnl_pct*100:+.2f}%", "accent": mean_acc,
+                     "sublabel": "cascade-grounded mean"},
+                    {"label": "Names Shocked",
+                     "value": f"{n_shocked} / {sv.n_names}", "accent": C_ACCENT,
+                     "sublabel": "held names with a live cascade idea"},
+                ], columns=4)
+
+                # Per-name Euler ES contributions — exposes a hidden shared bet.
+                # component_es_pct[name] is that name's share of the book's tail
+                # loss; the parts sum to es_pct EXACTLY (Euler decomposition), so a
+                # tail dominated by a few names = a concentrated bet hiding in plain
+                # sight. Show the top 8 by absolute contribution.
+                if sv.component_es_pct and sv.es_pct != 0:
+                    contrib = sorted(sv.component_es_pct.items(),
+                                     key=lambda kv: abs(kv[1]), reverse=True)[:8]
+                    rows = []
+                    for tkr, ces in contrib:
+                        wt = risk.weights.get(tkr, 0.0)          # book weight of this name
+                        shk = sv.shocks_pct.get(tkr, 0.0)        # the live cascade shock applied to it
+                        # This name's % of the whole-book tail (component / book ES).
+                        share = (ces / sv.es_pct * 100) if sv.es_pct else 0.0
+                        rows.append([
+                            _sans(tkr, color=C_TEXT, weight=700),
+                            _mono(f"{wt*100:.1f}%", color=C_TEXT2),
+                            _mono(f"{shk*100:+.1f}%", color=(
+                                C_LOW if shk < 0 else (C_HIGH if shk > 0 else C_TEXT3))),
+                            _mono(_fmt_dollar(ces * sv.portfolio_value),
+                                  color=C_LOW if ces < 0 else C_HIGH),
+                            _mono(f"{share:.0f}%", color=C_TEXT2),
+                        ])
+                    wsj_market_table(
+                        ["Name", "Weight", "Cascade Shock",
+                         "ES Contribution", "Share of Tail"], rows)
+                    st.caption(
+                        "Per-name Euler decomposition of the expected tail loss — "
+                        "contributions sum to the book ES exactly, so a tail "
+                        "dominated by a few names exposes a hidden shared bet. "
+                        "Cascade-grounded Monte-Carlo on your REAL marked book; the "
+                        "shocks are the modeled disruption cascade, not a feed."
+                    )
+        except Exception as se:
+            logger.debug(f"persisted-book stress-var section skipped: {se}")
+
+        weight_note = ("real marked weights" if risk.weights_are_real
+                       else "equal-weight fallback (prices dark)")
+        panel_note = (f"VaR on {risk.panel_obs}d real returns panel"
+                      if risk.panel_is_real
+                      else "VaR n/a — no real returns panel")
+        st.markdown(source_footer([
+            DataSource.live(
+                f"Persisted book ({weight_note}); {panel_note}; "
+                "scenario catalog from state/scenarios.py")
+            if (risk.panel_is_real or risk.weights_are_real) else
+            DataSource.demo(
+                "Persisted book — prices dark; scenario shocks real, VaR unavailable")
+        ]), unsafe_allow_html=True)
+    except Exception as exc:
+        logger.warning(f"persisted-book risk error: {exc}")
+
+
+def _render_book_cascade(positions, stock_data, macro_data, insights) -> None:
+    """Overlay the book onto the disruption cascade (R008) — the research-to-PM
+    bridge that the Portfolio tab never had.
+
+    NOTE: ``render`` here has no live freight/port/route feeds, so the cascade
+    runs macro-only and most route-stress terms are muted — this is a book TILT
+    against the macro-driven cascade, labeled honestly as such.
+    """
+    try:
+        if not positions:
+            return
+        from processing.book_exposure import (
+            book_cascade_overlay, book_commodity_exposure, book_concentration)
+
+        ideas = []
+        try:
+            from processing.disruption_cascade import score_equity_ideas
+            from processing.exposure_matrix import build_exposure_matrix
+            from processing.shipping_stress_index import compute_shipping_stress
+            stress = compute_shipping_stress({}, macro_data or {}, [], [])
+            exposure = build_exposure_matrix(stock_data or {})
+            ideas = score_equity_ideas(stress, exposure, stock_data or {}, insights)
+        except Exception as exc:
+            logger.debug(f"book cascade ideas unavailable: {exc}")
+
+        overlay = book_cascade_overlay(positions, ideas, stock_data or {})
+        conc = book_concentration(positions, stock_data or {})
+
+        section_header(
+            "Book vs Cascade",
+            "Your book's tilt against the macro-driven disruption cascade, "
+            "plus concentration")
+        tilt_color = (C_HIGH if overlay.net_tilt == "Bullish"
+                      else (C_LOW if overlay.net_tilt == "Bearish" else C_TEXT3))
+        metric_card_row([
+            {"label": "Net Cascade Tilt", "value": overlay.net_tilt,
+             "accent": tilt_color,
+             "sublabel": f"{overlay.coverage*100:.0f}% of book weight covered"},
+            {"label": "Weighted Conviction", "value": f"{overlay.weighted_conviction:.2f}",
+             "accent": C_MOD,
+             "sublabel": f"{overlay.n_covered} covered · {overlay.n_uncovered} uncovered"},
+            {"label": "Concentration (HHI)", "value": f"{conc['hhi']:.2f}",
+             "accent": C_ACCENT,
+             "sublabel": f"~{conc['effective_n']:.1f} effective names · top {conc['top_name_pct']:.0f}%"},
+        ], columns=3)
+
+        if overlay.top_contributors:
+            headers = ["Instrument", "Weight", "Cascade Idea", "Conviction",
+                       "Weighted Cascade"]
+            rows = []
+            for n in overlay.top_contributors:
+                dl = n.direction.lower()
+                d_col = (C_HIGH if dl.startswith("bull")
+                         else (C_LOW if dl.startswith("bear") else C_TEXT3))
+                rows.append([
+                    _mono(n.ticker, color=C_TEXT),
+                    _mono(f"{n.weight*100:.0f}%"),
+                    _sans(n.direction, color=d_col, weight=600),
+                    _mono(f"{n.conviction_score:.2f}"),
+                    _mono(f"{n.weighted_cascade:.3f}", color=C_MOD),
+                ])
+            wsj_market_table(headers, rows)
+
+        ce = book_commodity_exposure(positions, stock_data or {})
+        if ce:
+            top3 = sorted(ce.items(), key=lambda x: -x[1])[:3]
+            st.caption("Book commodity tilt — "
+                       + " · ".join(f"{k}: {v*100:.0f}%" for k, v in top3))
+        st.caption(
+            "⚠ Macro-only cascade (this tab has no live freight/port/route feeds) "
+            "— route-stress terms are muted, so read this as a book tilt, not a "
+            "full cascade. The Risk Lab tab runs the cascade on the full inputs.")
+    except Exception as exc:
+        logger.warning(f"book cascade error: {exc}")
 
 
 def _render_top_movers(df: pd.DataFrame) -> None:
@@ -843,7 +1215,14 @@ _FACTOR_LEVEL_KEYS: tuple[str, ...] = ("BDI", "SCFI", "Brent", "WTI", "DXY", "VI
 
 
 def _weekly_log_returns(stock_data) -> pd.DataFrame:
-    """Build a weekly log-returns DataFrame from the stock_data dict."""
+    """Build a weekly log-returns DataFrame from the stock_data dict.
+
+    Weekly LOG-RETURNS for the carrier factor model → look-ahead-free
+    total-return basis ``close * adj_factor`` (R127) so a split/large dividend
+    in the window doesn't inject a spurious ~-50% weekly return. adj_factor
+    defaults to 1.0 when absent (fixtures / legacy frames), so those are
+    unchanged.
+    """
     if not isinstance(stock_data, dict):
         return pd.DataFrame()
     frames: dict[str, pd.Series] = {}
@@ -858,7 +1237,13 @@ def _weekly_log_returns(stock_data) -> pd.DataFrame:
                 break
         if col is None:
             continue
-        series = pd.to_numeric(frame[col], errors="coerce").dropna()
+        series = pd.to_numeric(frame[col], errors="coerce")
+        # Apply the forward adj_factor (aligned on the frame's index) before the
+        # dropna so it stays row-aligned to its close. Missing → 1.0 (raw).
+        if "adj_factor" in frame.columns:
+            adj = pd.to_numeric(frame["adj_factor"], errors="coerce").fillna(1.0)
+            series = series * adj
+        series = series.dropna()
         if series.empty or not isinstance(series.index, pd.DatetimeIndex):
             continue
         weekly = series.resample("W-FRI").last().dropna()
@@ -868,6 +1253,44 @@ def _weekly_log_returns(stock_data) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1).dropna(how="all")
+
+
+def _bdi_level_series(macro_data) -> "pd.Series | None":
+    """A DATE-INDEXED Baltic Dry Index level series from ``macro_data``.
+
+    Tries the friendly name and the FRED series id, and promotes a ``date``
+    column (the real-cache shape) to the index — without this the BDI series
+    carries a RangeIndex and never aligns with the DatetimeIndex return panel,
+    so the correlation would be "n/a" forever. Returns None when absent.
+    """
+    if not macro_data:
+        return None
+    for key in ("BDI", "BDIY", "BSXRLM", "bdi"):
+        v = macro_data.get(key)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, pd.Series):
+                s = pd.to_numeric(v, errors="coerce").dropna()
+                if isinstance(s.index, pd.DatetimeIndex) and not s.empty:
+                    return s.sort_index()
+                continue
+            if isinstance(v, pd.DataFrame) and not v.empty:
+                df = v.copy()
+                if "date" in df.columns:
+                    df = df.set_index(pd.to_datetime(df["date"], errors="coerce"))
+                elif not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index, errors="coerce")
+                col = next((c for c in ("value", "close", "Close", "level")
+                            if c in df.columns), None)
+                ser = df[col] if col is not None else df.iloc[:, 0]
+                s = pd.to_numeric(ser, errors="coerce").dropna()
+                s = s[s.index.notna()]
+                if isinstance(s.index, pd.DatetimeIndex) and not s.empty:
+                    return s.sort_index()
+        except Exception:
+            continue
+    return None
 
 
 def _extract_level(series_or_frame) -> pd.Series | None:
@@ -971,7 +1394,7 @@ def _synth_returns_panel(tickers: list[str], n: int = 504) -> pd.DataFrame:
     return pd.DataFrame(samples, index=dates, columns=tickers)
 
 
-def _render_optimization_lab(df: pd.DataFrame) -> None:
+def _render_optimization_lab(df: pd.DataFrame, stock_data=None) -> None:
     """Run portfolio_optimizer's four methods on the current holdings and
     surface the comparison.
 
@@ -1000,7 +1423,17 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
             st.info("Need at least 2 tickers in the portfolio to optimize.")
             return
 
-        returns_df = _synth_returns_panel(tickers)
+        # Prefer REAL returns from cached closes (so the optimizer runs on the
+        # book's actual covariance + tails); fall back to the synthetic panel —
+        # labeled demo in the footer — only when prices are dark.
+        from processing.book_pnl import returns_panel
+        real_panel = returns_panel(stock_data, tickers)
+        opt_panel_is_real = not real_panel.empty
+        if opt_panel_is_real:
+            returns_df = real_panel
+            tickers = [t for t in tickers if t in returns_df.columns]
+        else:
+            returns_df = _synth_returns_panel(tickers)
         if returns_df.empty or returns_df.shape[1] < 2:
             st.info("Could not assemble a returns panel.")
             return
@@ -1089,7 +1522,8 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
         section_header(
             "Walk-Forward Backtest",
             "Train 252 days, rebalance every 21 days. Comparison of "
-            "max-Sharpe vs min-variance equity curves on the synthetic panel.",
+            "max-Sharpe vs min-variance equity curves (real returns where "
+            "available; see footer).",
         )
 
         bt_results: dict[str, "BacktestResult"] = {}  # type: ignore[name-defined]
@@ -1147,7 +1581,12 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
                             C_MOD if bt.sharpe > 0.3 else C_LOW
                         )
                     ),
-                    "sublabel": f"{bt.n_rebalances} rebalances",
+                    # R103: net-of-assumed-cost Sharpe + the turnover it pays for.
+                    "sublabel": (
+                        f"net Sharpe {bt.net_sharpe:.2f} after "
+                        f"~{bt.turnover_per_year:.1f}×/yr turnover · "
+                        f"{bt.n_rebalances} rebal"
+                    ),
                 })
             if metric_cards:
                 metric_card_row(metric_cards, columns=2)
@@ -1155,10 +1594,11 @@ def _render_optimization_lab(df: pd.DataFrame) -> None:
         # ── 5. Provenance footer ──────────────────────────────────────────
         st.markdown(
             source_footer([
-                DataSource.demo(
-                    "Synthetic 2-year returns panel — per-ticker mean/vol "
-                    "drawn deterministically via utils.helpers.stable_hash. "
-                    "Wire to a real return history when the platform persists it."
+                DataSource.live(
+                    "Real per-ticker daily returns from cached yfinance closes."
+                ) if opt_panel_is_real else DataSource.demo(
+                    "Synthetic 2-year returns panel — per-ticker mean/vol drawn "
+                    "deterministically via utils.helpers.stable_hash; prices dark."
                 ),
             ]),
             unsafe_allow_html=True,
@@ -1207,6 +1647,37 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
             ),
             unsafe_allow_html=True,
         )
+
+        # ── Book factor risk: R106 exposure vector + R107 factor-vs-specific
+        # split, computed on the SAME real fits + factor panel as the table
+        # below (so it inherits this lens's provenance badge). Equal-weights
+        # the fitted carriers as a representative book.
+        try:
+            from engine.carrier_factor_model import (
+                factor_covariance,
+                factor_risk_decomposition,
+                portfolio_factor_exposures,
+            )
+            _names = list(fits.keys())
+            _w = {n: 1.0 / len(_names) for n in _names}
+            _decomp = factor_risk_decomposition(_w, fits, factor_covariance(factors_df))
+            _expo = portfolio_factor_exposures(_w, fits)
+            if _decomp.total_vol > 0:
+                metric_card_row([
+                    {"label": "Book Vol (ann)", "value": f"{_decomp.total_vol * 100:.1f}%",
+                     "accent": C_ACCENT, "sublabel": f"equal-wt {_decomp.n_names} carriers"},
+                    {"label": "Factor Risk", "value": f"{_decomp.pct_factor * 100:.0f}%",
+                     "accent": C_MOD, "sublabel": "systematic"},
+                    {"label": "Specific Risk", "value": f"{_decomp.pct_specific * 100:.0f}%",
+                     "accent": C_TEXT2, "sublabel": "idiosyncratic"},
+                ], columns=3)
+                _top = sorted(_expo.exposures.items(), key=lambda kv: -abs(kv[1]))[:3]
+                st.caption(
+                    "Net factor tilt (Σ wᵢβᵢ): "
+                    + " · ".join(f"{f}: {v:+.2f}" for f, v in _top)
+                )
+        except Exception as _exc:  # noqa: BLE001
+            logger.debug(f"carrier factor-risk panel skipped: {_exc}")
 
         factor_cols = list(factors_df.columns)
         headers = ["Carrier", "α (bps)", "R²", "n"] + factor_cols
@@ -1292,7 +1763,8 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
                 "label":    "Signal Sharpe",
                 "value":    f"{bt.sharpe:+.2f}",
                 "accent":   sharpe_color,
-                "sublabel": f"{focus_ticker} · walk-forward",
+                # R103: net of an assumed per-trade turnover cost.
+                "sublabel": f"net {bt.net_sharpe:+.2f} · {focus_ticker} walk-fwd",
             },
             {
                 "label":    "Info Ratio vs. B&H",
@@ -1313,6 +1785,33 @@ def _render_carrier_factor_lens(stock_data, macro_data) -> None:
                 "sublabel": f"{bt.mean_return_bps:+.1f} bps / wk",
             },
         ])
+
+        # R114 (follow-on): the focus carrier is the BEST-R² of N — its raw PSR
+        # is selection-inflated. Run the backtest across all fitted carriers and
+        # apply a Benjamini-Hochberg FDR haircut so the displayed edge is honest
+        # about the multiple-comparisons surface.
+        try:
+            from processing.stat_significance import TrialsLedger
+            ledger = TrialsLedger("carrier-residual")
+            for tkr in fits:
+                try:
+                    cbt = bt if tkr == focus_ticker else residual_signal_backtest(
+                        returns_df[tkr], factors_df, name=tkr, lookback=52)
+                    ledger.add_sharpe(tkr, cbt.psr)
+                except ValueError:
+                    continue
+            if ledger.n_trials >= 2:
+                verdicts = {v.name: v for v in ledger.corrected(alpha=0.05)}
+                n_surv = sum(1 for v in verdicts.values() if v.survives_fdr)
+                fv = verdicts.get(focus_ticker)
+                focus_ok = "survives" if (fv and fv.survives_fdr) else "does NOT survive"
+                st.caption(
+                    f"Multiple-testing (R114): {n_surv}/{ledger.n_trials} carriers "
+                    f"clear the Benjamini-Hochberg FDR across the selection set; "
+                    f"{focus_ticker} (best-R²) {focus_ok} the haircut — a single "
+                    f"carrier's raw PSR is selection-inflated.")
+        except Exception as exc:
+            logger.debug(f"carrier FDR correction skipped: {exc}")
     except Exception as e:
         logger.warning(f"carrier factor lens error: {e}")
 
@@ -1354,11 +1853,18 @@ def render(stock_data, macro_data, insights) -> None:
                     _render_composition_chart(df)
                 with col_right:
                     section_header("Performance", "Portfolio NAV vs shipping benchmark — 90-day base=100")
-                    _render_performance_chart(df)
+                    _render_performance_chart(positions, stock_data)
 
             section_divider("Risk")
 
-            _render_risk_metrics(df)
+            _render_risk_metrics(df, stock_data, macro_data)
+
+            # R125 — live-book VaR + per-scenario stress on the PERSISTED book
+            # (state.positions), the OMS-risk-desk view. Distinct from the
+            # session-book risk strip above.
+            _render_persisted_book_risk(stock_data, macro_data, insights)
+
+            _render_book_cascade(positions, stock_data, macro_data, insights)
 
             # Per-position risk-return scatter — complements the aggregate
             # risk cards with a "where is risk concentrated?" cross-section.
@@ -1366,7 +1872,7 @@ def render(stock_data, macro_data, insights) -> None:
 
             section_divider("Optimization Lab")
 
-            _render_optimization_lab(df)
+            _render_optimization_lab(df, stock_data)
 
             section_divider("Factor Attribution")
 

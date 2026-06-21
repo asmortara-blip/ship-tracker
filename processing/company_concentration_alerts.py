@@ -31,6 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from loguru import logger
+
 
 __all__ = [
     "CONCENTRATION_BANDS",
@@ -254,4 +256,184 @@ def compute_concentration_alerts(
         ))
 
     out.sort(key=lambda a: a.hhi, reverse=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Multi-axis concentration (rec R040) — route / chokepoint / commodity SPOF.
+#
+# The port-footprint HHI above misses a real single-point-of-failure: a book
+# can be diversified across PORTS yet 90% dependent on one CHOKEPOINT (Suez) or
+# one COMMODITY. This scores concentration over three additional axes from the
+# exposure matrix + chokepoint registry.
+#
+# Two metric families, because the axes differ in kind:
+#   * commodity / route are PARTITIONS (shares sum to 1) -> Herfindahl HHI.
+#   * chokepoints on a lane are SERIAL, not parallel: an Asia->Europe voyage
+#     transits Malacca, Bab-el-Mandeb, Suez, Gibraltar AND Dover in series, so
+#     closing ANY ONE blocks the whole route. Each is therefore individually a
+#     full single-point-of-failure for that route's weight. The chokepoint
+#     concentration is the MAX single-chokepoint exposure (the fraction of the
+#     book one closure disrupts), NOT an HHI over a split — splitting a route's
+#     weight 1/K across its serial chokepoints would understate the SPOF by ~Kx
+#     (the original bug a review caught).
+# ---------------------------------------------------------------------------
+
+CONCENTRATION_AXES: tuple[str, ...] = ("commodity", "route", "chokepoint")
+
+
+@dataclass
+class AxisConcentrationAlert:
+    """One per (ticker, axis) whose concentration crosses the fire threshold."""
+
+    ticker: str
+    axis: str                               # "commodity" | "route" | "chokepoint"
+    concentration: float                    # in [0, 1] — HHI (partition axes) or
+    #                                         max single-key exposure (chokepoint)
+    concentration_band: str
+    severity: str                           # "HIGH" or "CRITICAL"
+    n_buckets: int                          # # of distinct keys on this axis
+    top_keys: list = field(default_factory=list)   # (key, share) desc
+    summary: str = ""
+
+
+def _normalize_shares(weights: dict) -> dict:
+    """Rescale non-negative weights so they sum to 1.0 (empty/zero -> {})."""
+    clean = {k: float(v) for k, v in (weights or {}).items() if float(v) > 0.0}
+    total = sum(clean.values())
+    if total <= 0.0:
+        return {}
+    return {k: v / total for k, v in clean.items()}
+
+
+def _route_to_chokepoints() -> dict:
+    """Invert the chokepoint registry: route_id -> [chokepoint keys it passes]."""
+    out: dict[str, list] = {}
+    try:
+        from processing.chokepoint_analyzer import CHOKEPOINTS
+    except Exception:  # pragma: no cover - defensive
+        return out
+    for key, cp in CHOKEPOINTS.items():
+        for rid in getattr(cp, "affected_routes", []) or []:
+            out.setdefault(str(rid), []).append(str(key))
+    return out
+
+
+def _route_shares(commodity_weights: dict) -> dict:
+    """Distribute each commodity weight evenly across the routes that carry it.
+
+    Returns route_id -> share (normalized to 1 over the routes touched).
+    """
+    from processing.exposure_matrix import routes_for_commodity
+    route_share: dict[str, float] = {}
+    for hs, w in (commodity_weights or {}).items():
+        routes = routes_for_commodity(hs)
+        if not routes:
+            continue
+        per = float(w) / len(routes)
+        for rid in routes:
+            route_share[str(rid)] = route_share.get(str(rid), 0.0) + per
+    return _normalize_shares(route_share)
+
+
+def chokepoint_shares(route_share: dict, *, route_to_cp: dict | None = None) -> dict:
+    """Per-chokepoint exposure of the book — each route's FULL weight to EVERY
+    chokepoint it transits.
+
+    Chokepoints on a lane are SERIAL (in-series transits), so closing any one
+    blocks the whole route: each chokepoint a route passes carries that route's
+    full weight as a dependency. The result therefore OVERLAPS and can sum to
+    > 1 by design — it is NOT a partition. ``chokepoint_concentration`` reads the
+    MAX of this vector (the fraction of the book one closure disrupts); a
+    chokepoint-free book yields ``{}`` -> 0.
+    """
+    r2c = _route_to_chokepoints() if route_to_cp is None else route_to_cp
+    cp_share: dict[str, float] = {}
+    for rid, w in (route_share or {}).items():
+        for cp in r2c.get(str(rid), []):
+            cp_share[cp] = cp_share.get(cp, 0.0) + float(w)
+    return cp_share
+
+
+def _axis_concentration(axis: str, shares: dict) -> float:
+    """Concentration score in [0, 1] for an axis.
+
+    Partition axes (commodity / route, shares sum to 1) use the Herfindahl HHI;
+    the serial chokepoint axis uses the MAX single-chokepoint exposure (the
+    book fraction one closure disrupts) — HHI is meaningless on an overlapping,
+    sum-can-exceed-1 vector.
+    """
+    if not shares:
+        return 0.0
+    if axis == "chokepoint":
+        return min(1.0, max(shares.values()))
+    return _hhi_from_shares(list(shares.values()))
+
+
+def axis_shares(ticker: str, axis: str) -> dict:
+    """The share vector for one concentration axis. Pure-ish (reads registries)."""
+    from processing.exposure_matrix import company_commodity_weights
+    comm = _normalize_shares(company_commodity_weights(ticker))
+    if axis == "commodity":
+        return comm
+    route_share = _route_shares(comm)
+    if axis == "route":
+        return route_share
+    if axis == "chokepoint":
+        return chokepoint_shares(route_share)
+    return {}
+
+
+def compute_axis_concentration_alerts(
+    tickers: list,
+    *,
+    axes: tuple = CONCENTRATION_AXES,
+    fire_threshold_hhi: float = DEFAULT_FIRE_THRESHOLD_HHI,
+    critical_threshold_hhi: float = DEFAULT_CRITICAL_THRESHOLD_HHI,
+    top_in_body: int = 3,
+) -> list:
+    """Per (ticker, axis), emit an alert when the axis concentration crosses fire.
+
+    Catches single-point-of-failure concentration the port-footprint HHI misses
+    (one chokepoint / one commodity). The score is the HHI on partition axes and
+    the max single-chokepoint exposure on the serial chokepoint axis (see
+    :func:`_axis_concentration`). Returns ``AxisConcentrationAlert`` sorted by
+    concentration desc. Never raises — a bad ticker / registry hiccup is logged
+    and skipped (not silently swallowed).
+    """
+    out: list = []
+    for ticker in tickers or []:
+        t = str(ticker or "")
+        if not t:
+            continue
+        for axis in axes:
+            try:
+                shares = axis_shares(t, axis)
+            except Exception as exc:
+                logger.debug(
+                    f"compute_axis_concentration_alerts: axis_shares failed for "
+                    f"ticker={t!r} axis={axis!r}: {exc}"
+                )
+                continue
+            if not shares:
+                continue
+            score = _axis_concentration(axis, shares)
+            if score < fire_threshold_hhi:
+                continue
+            top = sorted(shares.items(), key=lambda kv: kv[1], reverse=True)[:top_in_body]
+            top_str = ", ".join(f"{k} {s * 100:.0f}%" for k, s in top)
+            sev = _severity_for(score, critical_threshold_hhi)
+            metric = ("max single-chokepoint exposure" if axis == "chokepoint"
+                      else "HHI")
+            out.append(AxisConcentrationAlert(
+                ticker=t, axis=axis, concentration=round(score, 4),
+                concentration_band=concentration_band(score), severity=sev,
+                n_buckets=len(shares), top_keys=top,
+                summary=(
+                    f"{t}: {axis} concentration {score:.2f} ({metric}, "
+                    f"{concentration_band(score)}) — top: {top_str}. "
+                    "Single-point-of-failure risk on this axis."
+                ),
+            ))
+    out.sort(key=lambda a: a.concentration, reverse=True)
     return out

@@ -165,10 +165,10 @@ def add_escalation_step(
     chain_id = _new_id()
     created_at = _now_iso()
     try:
-        from state.db import get_connection
+        from state.db import get_connection, immediate_transaction
 
         conn = get_connection()
-        with conn:
+        with immediate_transaction(conn):
             # The UNIQUE (rule_id, user_id, step_number) index makes
             # INSERT-or-REPLACE the right idiom for "edit in place".
             # We DELETE first (vs ON CONFLICT REPLACE) so the new

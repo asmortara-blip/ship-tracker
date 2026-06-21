@@ -835,6 +835,143 @@ def illustrative_inputs(**overrides) -> ValuationInputs:
     return base
 
 
+# ---------------------------------------------------------------------------
+# R047 — bridge REAL Alpha Vantage fundamentals into ValuationInputs.
+#
+# The valuation math stays pure + network-free (see the module docstring): this
+# bridge takes an already-fetched ``av_data`` dict as an ARGUMENT and never
+# touches the network or cache. The cache-only read that produces ``av_data``
+# lives in the orchestration layer (``processing.company_profiler`` /
+# ``data.alphavantage_feed``), so a hot-path render can NEVER trigger a live AV
+# fetch and blow the 25/day free-tier quota.
+#
+# Provenance rule (honest by construction):
+#   * A ValuationInputs field is stamped ``"real"`` ONLY when it is populated
+#     from a genuinely-present AV measurement (a non-zero / non-sentinel value
+#     that the feed actually returned). AV's ``_safe_float`` coalesces missing
+#     values to ``0.0``, so we treat a 0.0 as "not covered" and LEAVE the field
+#     at its assumed default — never fabricating a "real" flag off a sentinel.
+#   * Every field the feed does NOT cover stays the existing assumed default
+#     with provenance ``"assumed"`` — i.e. a fully-dark feed reproduces today's
+#     all-assumed behaviour byte-for-byte.
+#
+# AV → ValuationInputs mapping (each documented as direct-measure vs proxy):
+#   fcf_0          ← EBITDA proxy (CompanyIncome.ebitda). A real, measured AV
+#                    figure used as a first-order FCF stand-in. Flagged "real"
+#                    (the underlying EBITDA is measured) but it is a PROXY for
+#                    free cash flow — see the note appended to the result.
+#   fcf_growth     ← revenue_growth_yoy_pct / 100 (measured YoY growth). "real".
+#   discount_rate  ← left ASSUMED. AV gives beta, but a CAPM discount rate needs
+#                    an assumed risk-free + equity-risk-premium, so the result
+#                    would be modeled, not measured — we do NOT stamp it "real".
+#   shares_outstanding ← market_cap (USD bn) / price-proxy. Only set when both a
+#                    real market cap AND a real per-share figure are present;
+#                    otherwise left assumed. "real" when set.
+#   terminal_growth, net_debt ← left ASSUMED (AV OVERVIEW exposes neither a
+#                    perpetual-growth nor a net-debt figure honestly).
+# ---------------------------------------------------------------------------
+
+# AV value keys this bridge understands. All are optional; a missing or
+# zero/sentinel value leaves the corresponding ValuationInputs field assumed.
+_AV_VALUATION_KEYS: tuple[str, ...] = (
+    "ebitda",                  # annual EBITDA (FCF proxy) — currency units
+    "revenue_growth_yoy_pct",  # measured YoY revenue/earnings growth, percent
+    "market_cap_bn",           # market capitalisation, USD billions
+    "price",                   # per-share price (to derive a share count)
+)
+
+
+def _av_real(value: object) -> float | None:
+    """Return a positive finite float from an AV value, else ``None``.
+
+    AV's parser coalesces every missing field to ``0.0``, so a 0.0 is
+    indistinguishable from "not reported" — we treat it as NOT covered and
+    return ``None`` so the caller leaves that ValuationInputs field assumed.
+    Negative values (e.g. a loss-making EBITDA) are also treated as not-usable
+    for the FCF/share-count proxies and return ``None``.
+    """
+    v = _finite(value, default=float("nan"))
+    if not np.isfinite(v) or v <= 0.0:
+        return None
+    return v
+
+
+def fundamentals_to_valuation_inputs(
+    ticker: str = "",
+    *,
+    av_data: dict | None = None,
+) -> ValuationInputs:
+    """Build :class:`ValuationInputs` from REAL Alpha Vantage fundamentals.
+
+    Pure + offline: ``av_data`` is an already-fetched dict (see
+    ``_AV_VALUATION_KEYS``); this function never fetches. When a value is
+    genuinely present (positive + finite) the corresponding ValuationInputs
+    field is populated from it and stamped ``"real"``; every field the feed does
+    not cover stays the standard assumed default with provenance ``"assumed"``.
+
+    A ``None`` / empty / fully-sentinel ``av_data`` therefore returns the exact
+    ``ValuationInputs()`` all-assumed default — today's behaviour, unchanged.
+
+    Never raises on a malformed payload: unknown keys are ignored and any value
+    that does not parse to a usable positive float is treated as not-covered.
+
+    Parameters
+    ----------
+    ticker:
+        Cosmetic only (kept for symmetry with the orchestration call site /
+        logging); the mapping does not depend on it.
+    av_data:
+        Optional dict with any of ``_AV_VALUATION_KEYS``. See the mapping in the
+        module-level comment above.
+    """
+    base = ValuationInputs()  # all-assumed defaults
+    data = dict(av_data) if isinstance(av_data, dict) else {}
+    if not data:
+        return base  # dark feed → byte-for-byte the assumed default
+
+    kwargs: dict = {}
+    real_fields: list[str] = []
+
+    # fcf_0 is DELIBERATELY left at the assumed default (review): AV EBITDA is
+    # (a) a PROXY for FCF, not measured FCF — stamping it 'real' overstated its
+    # provenance; (b) a single-QUARTER figure that an annual DCF would read ~4×
+    # too small; and (c) raw USD where fcf_0 expects MILLIONS (~1e6× off). The
+    # real EBITDA still surfaces as a labeled fundamental in the company profile;
+    # it does NOT masquerade as a measured annual FCF in the DCF. Only the clean,
+    # unit-safe mappings below (growth, share count) are stamped 'real'.
+
+    # fcf_growth ← measured YoY growth (percent → fraction).
+    growth_pct = data.get("revenue_growth_yoy_pct")
+    growth_val = _finite(growth_pct, default=float("nan"))
+    # Growth can legitimately be negative or zero; only require it be finite AND
+    # actually supplied (None / sentinel strings → not covered).
+    if growth_pct not in (None, "", "None", "N/A", "-") and np.isfinite(growth_val):
+        kwargs["fcf_growth"] = growth_val / 100.0
+        real_fields.append("fcf_growth")
+
+    # shares_outstanding ← market_cap (USD bn) / price. Needs BOTH real.
+    mcap_bn = _av_real(data.get("market_cap_bn"))
+    price = _av_real(data.get("price"))
+    if mcap_bn is not None and price is not None:
+        # market cap in USD billions / price-per-share → shares in billions →
+        # convert to the millions unit ValuationInputs uses for shares.
+        shares_millions = (mcap_bn * 1e9 / price) / 1e6
+        if np.isfinite(shares_millions) and shares_millions > 0.0:
+            kwargs["shares_outstanding"] = shares_millions
+            real_fields.append("shares_outstanding")
+
+    if not real_fields:
+        return base  # nothing usable in the payload → assumed default
+
+    inputs = replace(base, **kwargs)
+    # Stamp provenance: real for the fields we populated, assumed for the rest.
+    prov = {name: "assumed" for name in _FUNDAMENTAL_INPUTS}
+    for name in real_fields:
+        prov[name] = "real"
+    inputs.input_provenance = prov
+    return inputs
+
+
 def summarize_valuation(result: ValuationResult, *, ticker: str = "") -> str:
     """One-line human-readable summary of a :class:`ValuationResult`.
 

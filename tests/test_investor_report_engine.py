@@ -43,7 +43,7 @@ AI narrative generators (returns/structure only, prose details not asserted)
   every rec has key_thesis backfilled
 - _build_ai_analysis: returns AIAnalysis with disclaimer
 
-Module-level catalogs
+Honesty: no fabricated fallback catalogs
 - _MOCK_LONG_SIGNALS / _MOCK_SHORT_SIGNALS / _MOCK_FREIGHT_ROUTES /
   _MOCK_INSIGHT_OBJECTS / _MOCK_TRENDING_TOPICS: shape sanity
 
@@ -709,7 +709,7 @@ def _basic_alpha(signals=None) -> AlphaSignalSummary:
     ]
     return AlphaSignalSummary(
         signals=sigs,
-        portfolio={"expected_return": 12.0, "sharpe": 1.2},
+        portfolio={"expected_return": 12.0, "implied_sharpe": 1.2},
         top_long=sigs[:1],
         top_short=[],
         scorecard_df=pd.DataFrame(),
@@ -767,6 +767,36 @@ def test_executive_summary_mentions_top_pick_ticker() -> None:
         stocks=_basic_stocks(),
     )
     assert "ZIM" in text
+
+
+def _empty_alpha() -> AlphaSignalSummary:
+    return AlphaSignalSummary(
+        signals=[], portfolio={}, top_long=[], top_short=[],
+        scorecard_df=pd.DataFrame(),
+        signal_count_by_type={}, signal_count_by_conviction={},
+    )
+
+
+def test_executive_summary_no_signals_does_not_fabricate_portfolio() -> None:
+    # generate_all_signals can now legitimately return [] (dark prices / quiet
+    # markets). The summary must say so plainly, not narrate a phantom 0-signal
+    # portfolio "supported by convergent signals across momentum, macro, …".
+    text = _generate_executive_summary(
+        sentiment=_basic_sentiment(), macro=_basic_macro(), alpha=_empty_alpha(),
+        freight=_basic_freight(), market=_basic_market(), stocks=_basic_stocks(),
+    )
+    assert "produced no active signals" in text
+    assert "convergent signals across momentum" not in text
+    assert "0 active signals" not in text
+
+
+def test_outlook_no_signals_does_not_imply_portfolio_return() -> None:
+    text = _generate_outlook_30d(
+        macro=_basic_macro(), freight=_basic_freight(),
+        sentiment=_basic_sentiment(), alpha=_empty_alpha(),
+    )
+    assert "produced no signals on the current data" in text
+    assert "HIGH-conviction signals pointing net-" not in text
 
 
 # ─── _generate_sentiment_narrative ─────────────────────────────────────────
@@ -938,8 +968,9 @@ def test_top_recommendations_every_rec_has_key_thesis() -> None:
         assert isinstance(r["key_thesis"], list)
 
 
-def test_top_recommendations_empty_alpha_still_returns_mocks() -> None:
-    # No real signals + no insights → falls back to _MOCK_LONG_SIGNALS padding
+def test_top_recommendations_empty_alpha_returns_no_fabricated_recs() -> None:
+    # Honesty contract: no real signals + no insights -> NO fabricated recommendations.
+    # (Previously this padded from _MOCK_LONG_SIGNALS; that fabrication was removed.)
     empty_alpha = AlphaSignalSummary(
         signals=[], portfolio={}, top_long=[], top_short=[],
         scorecard_df=pd.DataFrame(),
@@ -950,8 +981,7 @@ def test_top_recommendations_empty_alpha_still_returns_mocks() -> None:
         risk_level="LOW", active_opportunities=0, high_conviction_count=0,
     )
     recs = _generate_top_recommendations(empty_alpha, empty_market, _basic_stocks(), _basic_freight())
-    assert len(recs) > 0
-    assert len(recs) <= 5
+    assert recs == []
 
 
 # ─── _build_ai_analysis ────────────────────────────────────────────────────
@@ -976,43 +1006,17 @@ def test_build_ai_analysis_returns_complete_dataclass() -> None:
     assert ai.disclaimer.startswith("IMPORTANT DISCLAIMER")
 
 
-# ─── Module-level catalogs ─────────────────────────────────────────────────
+# ─── Honesty: no fabricated fallback catalogs ─────────────────────────────────────────────────
 
 
-def test_mock_long_signals_shape() -> None:
-    for sig in ire._MOCK_LONG_SIGNALS:
-        assert sig["direction"] == "LONG"
-        assert sig["conviction"] in {"HIGH", "MEDIUM", "LOW"}
-        assert "ticker" in sig and sig["ticker"]
-        assert sig["expected_return_pct"] > 0  # LONG → positive expected return
-
-
-def test_mock_short_signals_shape() -> None:
-    for sig in ire._MOCK_SHORT_SIGNALS:
-        assert sig["direction"] == "SHORT"
-        assert sig["expected_return_pct"] < 0  # SHORT → negative expected return
-
-
-def test_mock_freight_routes_shape() -> None:
-    for r in ire._MOCK_FREIGHT_ROUTES:
-        assert r["trend"] in {"UP", "DOWN", "FLAT"}
-        assert r["label"] in {"Rising", "Falling", "Stable"}
-        assert isinstance(r["rate"], float)
-
-
-def test_mock_insight_objects_shape() -> None:
-    for ins in ire._MOCK_INSIGHT_OBJECTS:
-        assert ins.score > 0
-        assert ins.action in {"Prioritize", "Monitor", "Watch", "Caution", "Avoid"}
-        assert isinstance(ins.routes_involved, list)
-        assert isinstance(ins.stocks_potentially_affected, list)
-
-
-def test_mock_trending_topics_shape() -> None:
-    for t in ire._MOCK_TRENDING_TOPICS:
-        assert t["sentiment"] in {"BULLISH", "BEARISH", "NEUTRAL"}
-        assert t["color"].startswith("#")
-        assert t["count"] > 0
+def test_engine_has_no_mock_fallback_catalogs() -> None:
+    # Honesty regression guard: the engine must never carry fabricated
+    # signal/route/insight/topic catalogs used to pad sparse real data.
+    for name in (
+        "_MOCK_LONG_SIGNALS", "_MOCK_SHORT_SIGNALS", "_MOCK_FREIGHT_ROUTES",
+        "_MOCK_STOCK_DATA", "_MOCK_INSIGHT_OBJECTS", "_MOCK_TRENDING_TOPICS",
+    ):
+        assert not hasattr(ire, name), f"{name} fabrication must stay removed"
 
 
 # ─── Public surface aliases ────────────────────────────────────────────────
@@ -1055,19 +1059,27 @@ def test_build_investor_report_empty_inputs_returns_complete_report() -> None:
     assert report.data_quality == "DEGRADED"
 
 
-def test_build_investor_report_empty_inputs_padding_kicks_in() -> None:
-    # The engine pads top_long/top_short/routes/insights/trending_topics with
-    # mock data even when real data is sparse — this is a key design contract.
+def test_build_investor_report_empty_inputs_no_fabricated_padding() -> None:
+    # Honesty contract (replaces the old "padding kicks in" contract): with no
+    # real data the report must NOT fabricate signals/routes/insights/topics.
     report = build_investor_report(
         port_results=[], route_results=[], insights=[],
         freight_data={}, macro_data={}, stock_data={},
         news_items=[],
     )
-    assert len(report.alpha.top_long) >= 5
-    assert len(report.alpha.top_short) >= 5
-    assert len(report.freight.routes) >= 12
-    assert len(report.market.top_insights) >= 8
-    assert len(report.sentiment.trending_topics) >= 8
+    # No mock-catalog padding any more (these were forced to >= 5 before).
+    assert len(report.alpha.top_long) < 5
+    assert len(report.alpha.top_short) < 5
+    # The removed mock catalogs must not leak their distinctive tickers. (These
+    # never come from the real alpha engine, whose universe is ZIM/MATX/SBLK/DAC/CMRE.)
+    leaked = {getattr(s, "ticker", "") for s in list(report.alpha.top_long) + list(report.alpha.top_short)}
+    assert not ({"GSL", "GOGL", "INSW", "STNG", "FRO", "DHT", "HAFNI"} & leaked)
+    topic_names = {t.get("topic") for t in report.sentiment.trending_topics}
+    assert "Red Sea Disruption" not in topic_names and "Trans-Pacific Rates" not in topic_names
+    route_ids = {r.get("route_id") for r in report.freight.routes}
+    assert "Asia-Europe (FBX01)" not in route_ids
+    insight_titles = {getattr(i, "title", "") for i in report.market.top_insights}
+    assert "Trans-Pacific Rate Surge" not in insight_titles
 
 
 def test_build_investor_report_disclaimer_present() -> None:

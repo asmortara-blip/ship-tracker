@@ -273,7 +273,7 @@ def _render_top_disruptions(top: list) -> None:
     wsj_news_list([str(d) for d in top[:5]])
 
 
-def _render_ssi_overview(report) -> None:
+def _render_ssi_overview(report, macro_data=None) -> None:
     """Render the headline SSI banner, gauge, read-out and component cards."""
     ssi = float(getattr(report, "overall_ssi", 0.0) or 0.0)
     label = getattr(report, "ssi_label", "") or "Unknown"
@@ -335,6 +335,49 @@ def _render_ssi_overview(report) -> None:
             "sublabel": sublabel,
         })
     metric_card_row(cards, columns=4)
+
+    # ─ Effective fleet supply — how much nominal capacity is immobilised by
+    #   congestion + chokepoint diversion ("supply destruction by friction").
+    try:
+        from processing.effective_capacity import (
+            effective_supply, friction_read,
+        )
+        cong, chok = components.get("congestion"), components.get("chokepoint")
+        if cong is not None and chok is not None:
+            es = effective_supply(float(cong), float(chok))
+            section_header(
+                "Effective Fleet Supply",
+                "Nominal capacity discounted by congestion + chokepoint diversion")
+            metric_card_row([
+                {"label": "Effective Supply",
+                 "value": f"{es.effective_supply_pct * 100:.0f}%",
+                 "accent": _stress_color(es.drag_pct),
+                 "sublabel": "of nominal fleet capacity"},
+                {"label": "Friction Drag",
+                 "value": f"{es.drag_pct * 100:.0f}%",
+                 "accent": _stress_color(es.drag_pct),
+                 "sublabel": (f"congestion {es.congestion_drag * 100:.0f}% · "
+                              f"diversion {es.diversion_drag * 100:.0f}%")},
+            ], columns=2)
+            st.caption(
+                "Effective supply below nominal means vessel-days + ton-miles are "
+                "absorbed by friction — when freight rises into this, tightness is "
+                "supply-destruction-driven, not demand. Modeled weights "
+                "(congestion/diversion 50/50, drag capped at 60%).")
+
+            # ─ Friction classification: cross the supply drag with the BDI
+            #   (Baltic Dry Index, FRED BSXRLM) 30d freight move to name the
+            #   regime. Reuses the tested alpha-engine helper; absent BDI →
+            #   freight_chg 0.0 → an honest "Balanced" read.
+            from engine.alpha_engine import _bdi_pct_change
+            freight_chg = _bdi_pct_change(macro_data or {})
+            fr = friction_read(es.drag_pct, freight_chg)
+            alert_banner(
+                f"<strong>{fr.label}</strong> — {fr.rationale} "
+                f"(BDI 30d {freight_chg:+.1f}%)",
+                level="success" if fr.bullish_carriers else "info")
+    except Exception as exc:
+        logger.debug(f"effective supply readout skipped: {exc}")
 
     # ─ Top disruptions, if the report surfaced any ─
     top: list = getattr(report, "top_disruptions", []) or []
@@ -723,12 +766,15 @@ def _render_forecast_table(forecasts: list) -> None:
         trend = str(getattr(f, "trend", "") or "Stable")
         rate_fc = float(getattr(f, "rate_forecast_pct", 0.0) or 0.0)
         p90 = float(getattr(f, "mc_p90_upside", 0.0) or 0.0)
+        band = getattr(f, "stress_30d_band", (0.0, 0.0)) or (0.0, 0.0)
+        b_lo, b_hi = float(band[0]), float(band[1])
 
         rows.append([
             _route_cell(route_name),
             _mono(f"{current * 100:.0f}%", color=_stress_color(current)),
             _mono(f"{s7 * 100:.0f}%", color=_stress_color(s7)),
             _mono(f"{s30 * 100:.0f}%", color=_stress_color(s30)),
+            _sans(f"{b_lo * 100:.0f}–{b_hi * 100:.0f}%", color=C_TEXT3),
             badge(trend, color=_trend_color(trend)),
             _mono(f"{rate_fc * 100:+.1f}%", color=_pct_change_color(rate_fc)),
             _mono(f"{p90 * 100:+.1f}%", color=C_TEXT2),
@@ -736,10 +782,16 @@ def _render_forecast_table(forecasts: list) -> None:
 
     wsj_market_table(
         headers=[
-            "Route", "Current", "7-Day", "30-Day",
+            "Route", "Current", "7-Day", "30-Day", "30d Band",
             "Trend", "30d Rate", "MC P90",
         ],
         rows=rows,
+    )
+    st.caption(
+        "30d Band — an illustrative ±1σ (≈68%) interval around the 30-day "
+        "stress point, dispersion blended from the Monte-Carlo rate-tail "
+        "spread + the route's own rate volatility. Every forward point ships "
+        "an interval; it is not a fitted predictive band."
     )
 
 
@@ -790,7 +842,7 @@ def render(
 
         # ── B. Fleet-wide SSI overview ──────────────────────────────────────────
         try:
-            _render_ssi_overview(report)
+            _render_ssi_overview(report, macro_data)
         except Exception:
             logger.exception("Disruption Radar — SSI overview failed")
             st.error("Shipping Stress Index overview unavailable.")

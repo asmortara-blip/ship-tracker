@@ -2,10 +2,11 @@
 
 The signals here are MODELED, rule-based outputs computed from a mix of real
 market data (equity prices, FRED macro) and the platform's modeled shipping
-signals — and several inputs fall back to synthetic values when a feed is
-absent (see ``_fallback_price``). They emit illustrative entry/target/stop
-levels for research and scenario framing only. They are NOT investment advice
-and NOT price targets to trade on. See ``docs/DATA_PROVENANCE.md`` for the full
+signals. Every signal is anchored to a REAL observed entry price — when the
+price feed is dark for a ticker the signal is SUPPRESSED, never fabricated off
+a synthetic level. The entry/target/stop levels are modeled projections for
+research and scenario framing only: they are NOT investment advice and NOT
+price targets to trade on. See ``docs/DATA_PROVENANCE.md`` for the full
 real-vs-modeled map. This mirrors the discipline already in
 ``processing.disruption_cascade``.
 """
@@ -76,14 +77,24 @@ def _latest_close(stock_data: dict, ticker: str) -> Optional[float]:
 
 
 def _pct_change_30d(stock_data: dict, ticker: str) -> Optional[float]:
-    """30-day % price change for *ticker*. Positive = rising."""
+    """30-day % price change for *ticker*. Positive = rising.
+
+    A %-change over time → look-ahead-free TOTAL-RETURN basis (R127): the close
+    is taken as ``close * adj_factor`` so a split/large dividend in the window
+    doesn't read as a spurious ~-50%/+100% move. ``adj_factor`` defaults to 1.0
+    when absent (fixtures / legacy frames), so those numbers are unchanged.
+    ``_latest_close`` stays RAW — it is the transactable entry price."""
     df = stock_data.get(ticker)
     if df is None or df.empty or "close" not in df.columns:
         return None
     df2 = df.copy()
     if "date" in df2.columns:
         df2 = df2.sort_values("date")
-    vals = df2["close"].dropna()
+    from data.normalizer import adjusted_close
+    # Adjusted close aligned to df2's (already date-sorted) index, so the
+    # date-mask selection below picks the matching adjusted level.
+    df2 = df2.assign(_adj_close=adjusted_close(df2).values)
+    vals = df2["_adj_close"].dropna()
     if len(vals) < 2:
         return None
     current = float(vals.iloc[-1])
@@ -92,7 +103,7 @@ def _pct_change_30d(stock_data: dict, ticker: str) -> Optional[float]:
         mask = df2["date"] <= ref
         if not mask.any():
             return None
-        ago = float(df2.loc[mask, "close"].dropna().iloc[-1])
+        ago = float(df2.loc[mask, "_adj_close"].dropna().iloc[-1])
     else:
         idx = max(0, len(vals) - 31)
         ago = float(vals.iloc[idx])
@@ -198,10 +209,19 @@ def _make_signal(
     )
 
 
-def _fallback_price(ticker: str) -> float:
-    """Synthetic reference price when real data is unavailable."""
-    defaults = {"ZIM": 18.0, "MATX": 110.0, "SBLK": 12.0, "DAC": 65.0, "CMRE": 14.0}
-    return defaults.get(ticker, 20.0)
+def _entry_price(stock_data: dict, ticker: str) -> Optional[float]:
+    """Real most-recent close for *ticker*, or ``None``.
+
+    A signal must be anchored to an observed price. When the feed is dark we
+    SUPPRESS the signal rather than fabricate a level — the previous
+    ``_fallback_price`` substituted hardcoded synthetic levels (ZIM=18, …),
+    which made strategies emit illustrative entry/target/stop levels even on
+    empty input. Honesty throughline: no real price → no signal.
+    """
+    px = _latest_close(stock_data, ticker)
+    if px is None or px <= 0:
+        return None
+    return float(px)
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +257,9 @@ def _strategy_fbx_momentum(
         strength = min(1.0, (tp_chg - 15) / 25 * 0.7 + 0.3)
         conviction = "HIGH" if tp_chg > 30 else "MEDIUM"
         for ticker in ("ZIM", "MATX"):
-            price = _latest_close(stock_data, ticker) or _fallback_price(ticker)
+            price = _entry_price(stock_data, ticker)
+            if price is None:
+                continue
             rationale = (
                 "Trans-Pacific FBX rate up " + str(round(tp_chg, 1)) + "% over 30 days. "
                 "Rising spot rates directly lift revenue for Pacific-exposed carriers. "
@@ -275,7 +297,9 @@ def _strategy_fbx_momentum(
         strength = min(1.0, (ae_chg - 15) / 25 * 0.7 + 0.3)
         conviction = "HIGH" if ae_chg > 30 else "MEDIUM"
         for ticker in ("CMRE", "DAC"):
-            price = _latest_close(stock_data, ticker) or _fallback_price(ticker)
+            price = _entry_price(stock_data, ticker)
+            if price is None:
+                continue
             rationale = (
                 "Asia-Europe FBX rate up " + str(round(ae_chg, 1)) + "% over 30 days. "
                 "Container leasing companies benefit as carriers need more boxes to meet demand. "
@@ -316,7 +340,9 @@ def _strategy_bdi_divergence(
         divergence = bdi_chg - sblk_chg
         strength = min(1.0, divergence / 20 * 0.8 + 0.2)
         conviction = "HIGH" if divergence > 12 else "MEDIUM"
-        price = _latest_close(stock_data, "SBLK") or _fallback_price("SBLK")
+        price = _entry_price(stock_data, "SBLK")
+        if price is None:
+            return signals
         rationale = (
             "BDI rising +" + str(round(bdi_chg, 1)) + "% while SBLK only "
             + str(round(sblk_chg, 1)) + "% — divergence of "
@@ -370,7 +396,9 @@ def _strategy_congestion_arbitrage(
     if avg_congestion > 0.60:
         strength = min(1.0, (avg_congestion - 0.60) / 0.30 * 0.7 + 0.3)
         conviction = "HIGH" if avg_congestion > 0.75 else "MEDIUM"
-        price = _latest_close(stock_data, "ZIM") or _fallback_price("ZIM")
+        price = _entry_price(stock_data, "ZIM")
+        if price is None:
+            return signals
         congestion_pct = round(avg_congestion * 100, 1)
         rationale = (
             "Average port congestion at " + str(congestion_pct) + "% across monitored ports. "
@@ -421,7 +449,9 @@ def _strategy_mean_reversion(
         drop = abs(chg)
         strength = min(1.0, (drop - 15) / 20 * 0.7 + 0.3)
         conviction = "HIGH" if drop > 25 else ("MEDIUM" if drop > 18 else "LOW")
-        price = _latest_close(stock_data, ticker) or _fallback_price(ticker)
+        price = _entry_price(stock_data, ticker)
+        if price is None:
+            continue
         rationale = (
             ticker + " has fallen " + str(round(drop, 1)) + "% over 30 days "
             "against a positive freight rate backdrop. "
@@ -480,7 +510,9 @@ def _strategy_macro_regime(
         strength = min(1.0, (pmi_proxy - 53) / 10 * 0.5 + 0.3 + min(0.2, bdi_chg / 50))
         conviction = "HIGH" if pmi_proxy > 56 and bdi_chg > 5 else "MEDIUM"
         for ticker in _TICKERS:
-            price = _latest_close(stock_data, ticker) or _fallback_price(ticker)
+            price = _entry_price(stock_data, ticker)
+            if price is None:
+                continue
             target_pct = 10.0 + (pmi_proxy - 53) * 0.5
             rationale = (
                 "Macro regime: PMI proxy at " + str(round(pmi_proxy, 1))
@@ -507,7 +539,9 @@ def _strategy_macro_regime(
     elif pmi_proxy < 47:
         strength = min(1.0, (47 - pmi_proxy) / 8 * 0.7 + 0.3)
         conviction = "HIGH" if pmi_proxy < 44 else "MEDIUM"
-        price = _latest_close(stock_data, "ZIM") or _fallback_price("ZIM")
+        price = _entry_price(stock_data, "ZIM")
+        if price is None:
+            return signals
         rationale = (
             "Macro regime: PMI proxy at " + str(round(pmi_proxy, 1)) + " (below 47 threshold). "
             "Weak manufacturing activity historically pressures spot freight rates. "
@@ -544,11 +578,18 @@ def _strategy_seasonal(
     if 4 <= month <= 6:
         weeks_until_peak = (datetime.date(today.year, 7, 1) - today).days // 7
         strength = max(0.35, min(0.85, 1.0 - weeks_until_peak / 13))
-        conviction = "HIGH" if month == 6 else ("MEDIUM" if month == 5 else "LOW")
+        # A calendar-only prior is weak evidence on its own: it is NOT confirmed
+        # by live spot-rate or price data, so it never claims more than LOW
+        # conviction. (Previously June→HIGH — overstating pure seasonality as a
+        # high-conviction call. Honesty throughline.)
+        conviction = "LOW"
         for ticker in ("ZIM", "MATX"):
-            price = _latest_close(stock_data, ticker) or _fallback_price(ticker)
+            price = _entry_price(stock_data, ticker)
+            if price is None:
+                continue
             rationale = (
-                "Seasonal pre-positioning: Peak shipping season (Jul-Sep) is approaching. "
+                "Seasonal prior (calendar-based, not yet confirmed by live spot rates): "
+                "Peak shipping season (Jul-Sep) is approaching. "
                 "Retailers front-load inventory ahead of back-to-school and holiday prep. "
                 "Trans-Pacific rates typically rise 20-40% from May trough to July peak. "
                 "ZIM and MATX have historically led the seasonal move by 4-6 weeks."
@@ -566,14 +607,21 @@ def _strategy_seasonal(
                 time_horizon="3M",
                 rationale=rationale,
             ))
-        logger.info("Seasonal: Peak season pre-trade signal (month=" + str(month) + ")")
+        # Only log when a signal was actually emitted — every ticker is skipped
+        # when its price feed is dark, in which case nothing was added.
+        if signals:
+            logger.info("Seasonal: Peak season pre-trade signal (month=" + str(month) + ")")
 
     # Post-CNY recovery (March-April → LONG SBLK)
     if month in (3, 4):
         strength = 0.55 if month == 3 else 0.45
-        conviction = "MEDIUM"
-        price = _latest_close(stock_data, "SBLK") or _fallback_price("SBLK")
+        # Calendar-only prior — capped at LOW (see the peak-season note above).
+        conviction = "LOW"
+        price = _entry_price(stock_data, "SBLK")
+        if price is None:
+            return signals
         rationale = (
+            "Seasonal prior (calendar-based, not yet confirmed by live rates): "
             "Post-Chinese New Year recovery pattern: dry bulk demand typically rebounds "
             "in March-April as Chinese factories resume full production. "
             "SBLK has significant exposure to iron ore and coal routes from Asia. "
@@ -678,15 +726,23 @@ def compute_portfolio_alpha(
         stock_data: dict[ticker -> DataFrame]
 
     Returns:
-        dict with keys: weights, expected_return, portfolio_vol, sharpe, max_dd_estimate
+        dict with keys: weights, expected_return, portfolio_vol, implied_sharpe,
+        implied_stop_downside_pct, basis.
+
+    Honesty note: ``implied_sharpe`` and ``implied_stop_downside_pct`` are
+    MODEL-IMPLIED projections derived from the signals' own price targets / stop
+    placements and realized volatility — they are NOT realized or backtested
+    performance statistics. ``basis="model-implied"`` marks this explicitly. A
+    realized Sharpe/drawdown requires the point-in-time signal ledger (R004).
     """
     if not signals:
         return {
             "weights": {},
             "expected_return": 0.0,
             "portfolio_vol": 0.0,
-            "sharpe": 0.0,
-            "max_dd_estimate": 0.0,
+            "implied_sharpe": 0.0,
+            "implied_stop_downside_pct": 0.0,
+            "basis": "model-implied",
         }
 
     conviction_w = {"HIGH": 1.0, "MEDIUM": 0.65, "LOW": 0.35}
@@ -726,7 +782,8 @@ def compute_portfolio_alpha(
     for ticker in weights:
         df = stock_data.get(ticker)
         if df is not None and not df.empty and "close" in df.columns:
-            rets = df["close"].pct_change().dropna()
+            from data.normalizer import adjusted_close
+            rets = adjusted_close(df).pct_change().dropna()   # R127: look-ahead-free
             if len(rets) > 10:
                 vols[ticker] = float(rets.std() * np.sqrt(252) * 100)
             else:
@@ -740,28 +797,33 @@ def compute_portfolio_alpha(
         portfolio_vol += (w ** 2) * (vols.get(ticker, 40.0) ** 2)
     portfolio_vol = round(float(np.sqrt(portfolio_vol)), 2)
 
-    # Sharpe (assume risk-free = 5%)
-    sharpe = round((expected_return - 5.0) / portfolio_vol, 3) if portfolio_vol > 0 else 0.0
+    # MODEL-IMPLIED return/risk ratio: the model's OWN expected return (from its
+    # price targets) over realized volatility, less a 5% risk-free assumption.
+    # This is a forward projection of the signal set, NOT a realized Sharpe.
+    implied_sharpe = round((expected_return - 5.0) / portfolio_vol, 3) if portfolio_vol > 0 else 0.0
 
-    # Max drawdown estimate: 1.5x the weighted average stop distance
-    max_dd_parts = []
+    # MODEL-IMPLIED downside: the weighted-average stop-loss distance — i.e. the
+    # loss if every position's stop triggers. A risk proxy from the signals' own
+    # stop placements, NOT a realized or simulated max drawdown.
+    downside_parts = []
     for sig in signals:
         w = abs(weights.get(sig.ticker, 0.0))
         stop_dist = abs(sig.entry_price - sig.stop_loss) / sig.entry_price * 100 if sig.entry_price else 0
-        max_dd_parts.append(w * stop_dist)
-    max_dd_estimate = round(sum(max_dd_parts) * 1.5, 2)
+        downside_parts.append(w * stop_dist)
+    implied_stop_downside_pct = round(sum(downside_parts), 2)
 
     logger.info(
-        "Portfolio alpha computed: return=" + str(expected_return) + "%, "
-        + "vol=" + str(portfolio_vol) + "%, sharpe=" + str(sharpe)
+        "Portfolio alpha computed (model-implied): return=" + str(expected_return) + "%, "
+        + "vol=" + str(portfolio_vol) + "%, implied_sharpe=" + str(implied_sharpe)
     )
 
     return {
         "weights": weights,
         "expected_return": expected_return,
         "portfolio_vol": portfolio_vol,
-        "sharpe": sharpe,
-        "max_dd_estimate": max_dd_estimate,
+        "implied_sharpe": implied_sharpe,
+        "implied_stop_downside_pct": implied_stop_downside_pct,
+        "basis": "model-implied",
     }
 
 

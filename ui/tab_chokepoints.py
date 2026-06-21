@@ -63,6 +63,14 @@ _SRC_RATE_PREMIUM = DataSource.modeled(
 _SRC_HISTORICAL = DataSource.modeled(
     "Maritime incident archive · academic + trade-press"
 )
+_SRC_ESCALATION = DataSource.modeled(
+    "Modeled escalation ladder (R034) — probabilistic forward-escalation "
+    "refinement of the deterministic chokepoint risk",
+    notes=(
+        "Conservative, published per-state Markov transition probabilities — "
+        "NOT a fitted hazard model and NOT an observed feed."
+    ),
+)
 
 
 # ── Static data ─────────────────────────────────────────────────────────────
@@ -141,6 +149,15 @@ _RISK_COLORS = {
     "HIGH":      _C_ORANGE,
     "MODERATE":  C_MOD,
     "LOW":       C_HIGH,
+}
+
+# Ladder-state badge colors (low → high severity), aligned to the risk palette.
+_LADDER_STATE_COLORS = {
+    "DE_ESCALATING": C_HIGH,
+    "TENSION":       C_MOD,
+    "INCIDENT":      _C_ORANGE,
+    "PARTIAL":       C_LOW,
+    "CLOSURE":       C_LOW,
 }
 
 _HOUTHI_INCIDENTS = [
@@ -276,6 +293,178 @@ def _render_status_board() -> None:
     except Exception as e:
         logger.error(f"status_board render error: {e}")
         st.error("Chokepoint status board unavailable.")
+
+
+# ── Section 1b: Forward Escalation Outlook (R034) ───────────────────────────
+#
+# Surfaces processing/escalation_ladder.py: a MODELED probabilistic refinement
+# of the deterministic chokepoint risk. We show, per chokepoint, the current
+# ladder state, the deterministic "current" score, the modeled forward expected
+# score (the Markov ladder rolled `horizon` steps), and the delta. This is a
+# modeled overlay — NOT a feed and NOT a fitted model — and is labelled as such.
+
+def _render_escalation_outlook() -> None:
+    try:
+        from processing.chokepoint_analyzer import (
+            CHOKEPOINTS,
+            compute_chokepoint_risk_score,
+        )
+        from processing.escalation_ladder import (
+            PROVENANCE_NOTE,
+            escalation_alert_signals,
+            ladder_expected_scores,
+        )
+
+        section_header(
+            "Forward Escalation Outlook",
+            subtitle="Modeled probability-weighted forward risk per chokepoint — "
+                     "a Markov escalation ladder priced over the next step(s)",
+        )
+
+        # Horizon selector (1–4 steps; each step ≈ one weekly review). Keyed
+        # uniquely so it never collides with another widget on the page.
+        horizon = st.slider(
+            "Forward horizon (steps)",
+            min_value=1,
+            max_value=4,
+            value=1,
+            key="chokepoint_escalation_horizon",
+            help="Number of ~weekly review steps to roll the modeled "
+                 "escalation ladder forward.",
+        )
+
+        # Deterministic "current" score, the forward-blended score, and the
+        # raw ladder results — all keyed identically to CHOKEPOINTS.
+        current = compute_chokepoint_risk_score()
+        forward = compute_chokepoint_risk_score(
+            escalation_ladder=True, ladder_horizon=horizon
+        )
+        ladder = ladder_expected_scores(CHOKEPOINTS, horizon=horizon)
+
+        # Short modeled-provenance caption (trimmed PROVENANCE_NOTE).
+        st.markdown(
+            f'<div class="wsj-body" style="color:{C_TEXT3};">'
+            f'{PROVENANCE_NOTE}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Early-warning callout: ELEVATED passages whose modeled forward path
+        # prices real escalation ABOVE today's deterministic risk — the
+        # closure-is-coming signal before the closure. Calm and already-hot
+        # passages are excluded by the gate (see escalation_alert_signals).
+        signals = escalation_alert_signals(current, ladder)
+        if signals:
+            names = ", ".join(
+                f"{getattr(CHOKEPOINTS.get(s.key), 'name', s.key)} "
+                f"({s.current_state.replace('_', ' ').title()}, "
+                f"{s.forward_score:.2f} vs {s.current_score:.2f})"
+                for s in signals
+            )
+            st.warning(
+                f"**Forward-escalation early warning** — {len(signals)} elevated "
+                f"passage(s) on a modeled path above current risk: {names}. "
+                "Modeled (Markov ladder), not a feed."
+            )
+
+        # Expected closure cost (R258) — fuse P(reach CLOSURE within horizon)
+        # with the CONDITIONAL closure impact: expected = probability × severity.
+        # This is the decision-grade number the bare risk score never gives.
+        try:
+            from processing.closure_scenario import expected_closure_impacts
+
+            cost = expected_closure_impacts(CHOKEPOINTS, horizon=horizon)
+            ranked = sorted(
+                cost.values(),
+                key=lambda c: abs(getattr(c, "expected_rate_impact_pct", 0.0)),
+                reverse=True,
+            )[:3]
+            shown = [c for c in ranked
+                     if abs(getattr(c, "expected_rate_impact_pct", 0.0)) > 1e-9]
+            if shown:
+                parts = "; ".join(
+                    f"{getattr(CHOKEPOINTS.get(c.chokepoint_key), 'name', c.chokepoint_key)}: "
+                    f"P(closure) {c.p_closure * 100:.0f}% × {c.conditional_rate_impact_pct:+.0f}% "
+                    f"→ {c.expected_rate_impact_pct:+.1f}% expected freight-rate impact"
+                    for c in shown
+                )
+                st.markdown(
+                    f'<div class="wsj-body" style="color:{C_TEXT3};">'
+                    f'<b>Expected closure cost (modeled)</b> — {parts}.</div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception as ce:
+            logger.debug(f"expected closure cost readout skipped: {ce}")
+
+        # One row per chokepoint, sorted hottest-first by forward score.
+        rows = []
+        chart_names: list[str] = []
+        chart_scores: list[float] = []
+        for key, cp in sorted(
+            CHOKEPOINTS.items(),
+            key=lambda kv: forward.get(kv[0], 0.0),
+            reverse=True,
+        ):
+            res = ladder.get(key)
+            state = res.current_state if res is not None else "DE_ESCALATING"
+            cur_score = current.get(key, 0.0)
+            fwd_score = forward.get(key, 0.0)
+            delta = fwd_score - cur_score
+            state_color = _LADDER_STATE_COLORS.get(state, C_TEXT2)
+            delta_color = C_LOW if delta > 1e-6 else C_TEXT3
+            rows.append([
+                _sans(cp.name, color=C_TEXT, weight=700),
+                badge(state, color=state_color),
+                _mono(f"{cur_score:.3f}", color=C_TEXT2),
+                _mono(f"{fwd_score:.3f}", color=C_MOD),
+                _mono(f"{delta:+.3f}", color=delta_color),
+            ])
+            chart_names.append(cp.name)
+            chart_scores.append(fwd_score)
+
+        wsj_market_table(
+            headers=[
+                "Chokepoint", "Current Ladder State",
+                "Current Risk (det.)", "Forward Expected (modeled)", "Δ (fwd − cur)",
+            ],
+            rows=rows,
+        )
+
+        # Horizontal bar: modeled forward expected score per chokepoint
+        # (hottest on top — reverse the descending lists for a top-down read).
+        try:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=list(reversed(chart_scores)),
+                y=list(reversed(chart_names)),
+                orientation="h",
+                marker=dict(color=C_MOD, line=dict(width=0)),
+                hovertemplate="<b>%{y}</b><br>forward expected: "
+                              "%{x:.3f}<extra></extra>",
+            ))
+            apply_dark_layout(fig, height=320)
+            fig.update_layout(
+                title=dict(
+                    text=f"Modeled Forward Expected Risk (horizon {horizon})",
+                    font=dict(color=C_TEXT, size=13), x=0.02,
+                ),
+                xaxis=dict(
+                    range=[0, 1], gridcolor=C_BORDER,
+                    tickfont=dict(color=C_TEXT2), title="Expected severity [0–1]",
+                ),
+                yaxis=dict(tickfont=dict(color=C_TEXT2)),
+                margin=dict(l=0, r=10, t=40, b=0),
+            )
+            st.plotly_chart(
+                fig, use_container_width=True,
+                key="chokepoint_escalation_bar",
+            )
+        except Exception as ce:
+            logger.warning(f"escalation_outlook chart skipped: {ce}")
+
+        st.markdown(source_footer([_SRC_ESCALATION]), unsafe_allow_html=True)
+    except Exception as e:
+        logger.warning(f"escalation_outlook render error: {e}")
+        st.error("Forward escalation outlook unavailable.")
 
 
 # ── Section 2: Canal Deep Dives ─────────────────────────────────────────────
@@ -724,6 +913,31 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
     from engine.perf_telemetry import track_render
     
     with track_render('chokepoints'):
+        # R007 per-session UI overlay: mirror worker.run_canal_sync_job so the
+        # UI process's CHOKEPOINTS registry reflects live Suez/Panama transit.
+        # apply_live_canal_state is REAL-only (synthetic stats NO-OP via
+        # CanalStats.is_synthetic) and idempotent, so tests (synthetic fallback)
+        # stay baseline. Runs once per render; the canal feed has a 12h cache.
+        try:
+            from data.canal_feed import fetch_panama_stats, fetch_suez_stats
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            apply_live_canal_state([fetch_suez_stats(), fetch_panama_stats()])
+        except Exception as _exc:
+            logger.debug(f"canal->chokepoint UI overlay skipped: {_exc}")
+
+        # S1 per-session UI overlay: escalate the NON-canal straits from the REAL
+        # IMF PortWatch transit feed (mirrors worker.run_portwatch_transit_job).
+        # Offline-safe + escalate-only: an unavailable/empty feed is a no-op so
+        # the baseline stands; Suez/Panama stay owned by the canal overlay above.
+        transit_marker: dict = {}
+        try:
+            from data.portwatch_feed import fetch_chokepoint_transits
+            from processing.canal_chokepoint_sync import apply_live_chokepoint_transits
+            transit_marker = apply_live_chokepoint_transits(
+                fetch_chokepoint_transits()) or {}
+        except Exception as _exc:
+            logger.debug(f"portwatch->chokepoint UI overlay skipped: {_exc}")
+
         try:
             page_header(
                 title="Strategic Waterway & Chokepoint Intelligence",
@@ -747,6 +961,36 @@ def render(port_results=None, freight_data=None, insights=None) -> None:
                 ],
                 columns=3,
             )
+
+            # S1 provenance: which straits read REAL IMF PortWatch transit data
+            # (and any escalated by a real transit collapse), stated honestly.
+            _names = {"bab_el_mandeb": "Bab-el-Mandeb", "hormuz": "Hormuz",
+                      "malacca": "Malacca", "gibraltar": "Gibraltar", "dover": "Dover",
+                      "danish_straits": "Danish Straits", "lombok_sunda": "Lombok/Sunda"}
+            if transit_marker:
+                live = sorted(_names.get(k, k) for k in transit_marker)
+                escalated = sorted(
+                    (k for k, m in transit_marker.items()
+                     if (m.get("transit_drop") or 0.0) >= 0.15),
+                    key=lambda k: -(transit_marker[k].get("transit_drop") or 0.0))
+                if escalated:
+                    esc = "; ".join(
+                        f"{_names.get(k, k)} −{transit_marker[k]['transit_drop'] * 100:.0f}% "
+                        f"transits → {transit_marker[k]['risk_level']}"
+                        for k in escalated)
+                    st.caption(
+                        f"🛰 **Live transit telemetry (IMF PortWatch)** — {len(live)} "
+                        f"straits on real data. **Escalated by real transit collapse:** "
+                        f"{esc}. (Suez/Panama via the canal feed.)")
+                else:
+                    st.caption(
+                        f"🛰 **Live transit telemetry (IMF PortWatch)** — {len(live)} "
+                        f"straits on real data ({', '.join(live)}); all near baseline "
+                        f"flow. (Suez/Panama via the canal feed.)")
+            else:
+                st.caption(
+                    "🛰 IMF PortWatch transit feed unavailable this load — chokepoint "
+                    "risk on the modeled baseline (no real transit signal fabricated).")
         except Exception as e:
             logger.error(f"header render error: {e}")
 

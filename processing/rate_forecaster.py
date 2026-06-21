@@ -263,15 +263,26 @@ def _train_forecast_model(
 
     - 7d  → Ridge (stable, avoids overfit on short horizons)
     - 30d → GradientBoostingRegressor (captures non-linear macro interactions)
+
+    ``r2`` is a LEAK-FREE out-of-sample estimate: walk-forward ``TimeSeriesSplit``
+    (each fold trains only on the PAST), the ``StandardScaler`` refit INSIDE each
+    fold via a ``Pipeline`` (validation rows never touch the scaler), and a
+    one-horizon ``gap`` embargo so the overlapping forward-looking feature rows
+    can't bleed from train into validation. The earlier full-data-scaler + plain
+    ``KFold`` path inflated this r2 — it trained on FUTURE folds and standardised
+    using the validation rows — and since ``model_r2`` feeds the live
+    ``direction_confidence``, that inflation propagated into a user-facing number.
+    Honest ``0.0`` when there isn't enough history for a leak-free estimate.
+
+    NOTE: engineering hygiene, NOT a real-edge claim — the freight-rate target is
+    itself synthetic-fallback when the FBX feed is unreachable.
     """
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import Ridge
     from sklearn.ensemble import GradientBoostingRegressor
-    from sklearn.model_selection import cross_val_score
+    from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+    from sklearn.pipeline import Pipeline
     import numpy as _np
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
 
     if horizon <= 7:
         model = Ridge(alpha=10.0)
@@ -285,22 +296,26 @@ def _train_forecast_model(
             random_state=42,
         )
 
+    # Leak-free OOS R²: walk-forward CV with the scaler inside each fold and a
+    # one-horizon embargo. 0.0 when history is too short for a fair estimate.
+    r2 = 0.0
     n = len(X)
-    if n >= 10:
-        cv_folds = min(5, n // 4)
+    embargo = max(1, int(horizon))
+    if n >= 4 * (embargo + 1):
+        n_splits = min(5, n // (2 * (embargo + 1)))
         try:
-            scores = cross_val_score(
-                model, X_scaled, y,
-                cv=cv_folds,
-                scoring="r2",
-                n_jobs=1,
-            )
+            pipe = Pipeline([("scaler", StandardScaler()), ("model", model)])
+            tscv = TimeSeriesSplit(n_splits=max(2, n_splits), gap=embargo)
+            scores = cross_val_score(pipe, X, y, cv=tscv, scoring="r2", n_jobs=1)
             r2 = float(_np.clip(_np.nanmean(scores), -1.0, 1.0))
         except Exception:
             r2 = 0.0
-    else:
-        r2 = 0.0
 
+    # Deployed model: fit scaler + model on ALL available history. Using every
+    # observation for the PRODUCTION fit is correct (not a leak — the leak was
+    # only in the OOS *estimate* above).
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
     model.fit(X_scaled, y)
     return model, scaler, r2
 

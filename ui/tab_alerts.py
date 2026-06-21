@@ -4217,6 +4217,158 @@ def _render_effectiveness_backtest() -> None:
         st.error("Alert effectiveness panel unavailable.")
 
 
+def _render_threshold_tuner() -> None:
+    """Self-tuning loop: recommend + apply a backtested alert threshold (R043).
+
+    The companion to ``_render_effectiveness_backtest`` above: that panel shows
+    how the CURRENT bars are doing; this one re-scores an alert_type across a
+    candidate threshold grid and recommends the bar that MAXIMIZES hit-rate
+    subject to a min-fire-count floor — then lets the operator APPLY it with one
+    click (writing the override store the rate detector already reads).
+
+    Honesty: the sweep reuses the real backtest scoring (no fabricated
+    hit-rates); when no candidate clears the floor we recommend nothing rather
+    than invent a bar from thin evidence. The apply is reversible — the success
+    toast reports the prior bar. Fully try/except-wrapped so a kv_state outage
+    cannot break the rest of the Alert Center tab.
+    """
+    try:
+        from engine.alert_backtest import (
+            apply_recommended_threshold,
+            recommend_threshold,
+        )
+
+        section_divider("Self-Tuning Thresholds")
+        st.caption(
+            "Re-score an alert type across candidate thresholds and recommend "
+            "the bar that maximizes hit-rate (subject to a minimum fire-count so "
+            "a lucky 2-fire bar can't win). Apply writes the same override the "
+            "rate detector reads — and is reversible."
+        )
+
+        # Only the alert types the backtest engine actually scores.
+        SCORED_TYPES = ["STOCK_MOVE", "BDI_MOVE", "RATE_SURGE"]
+
+        tc1, tc2 = st.columns([2, 1], gap="medium")
+        with tc1:
+            atype = st.selectbox(
+                "Alert type to tune",
+                options=SCORED_TYPES,
+                index=0,
+                key="tuner_alert_type",
+                help="The historical fires of this type are re-scored across "
+                     "the candidate grid.",
+            )
+        with tc2:
+            min_fires = st.number_input(
+                "Min fire-count floor",
+                min_value=1, max_value=50, value=5, step=1,
+                key="tuner_min_fires",
+                help="A candidate must produce at least this many historical "
+                     "fires before its hit-rate is trusted.",
+            )
+
+        # Reuse the backtest panel's window/lookback selection when present.
+        window = int(st.session_state.get("backtest_window_days", 7) or 7)
+        lookback = int(st.session_state.get("backtest_lookback_days", 90) or 90)
+        stock_data   = st.session_state.get("stock_data", {}) or {}
+        freight_data = st.session_state.get("freight_data", {}) or {}
+        macro_data   = st.session_state.get("macro_data", {}) or {}
+
+        rec = recommend_threshold(
+            atype,
+            min_fire_count=int(min_fires),
+            stock_data=stock_data, freight_data=freight_data, macro_data=macro_data,
+            window_days=window, lookback_days=lookback,
+        )
+
+        # ── Headline cards: recommended bar vs current bar ─────────────────
+        rec_val = f"{rec.recommended:g}%" if rec.recommended is not None else "—"
+        rec_accent = C_HIGH if rec.recommended is not None else C_TEXT3
+        cur_val = (f"{rec.current_threshold:g}%"
+                   if rec.current_threshold is not None else "default")
+        cur_hr = (f"{rec.current_hit_rate * 100:.1f}%"
+                  if rec.current_hit_rate is not None else "n/a")
+        metric_card_row([
+            {"label": "Recommended Bar", "value": rec_val, "accent": rec_accent,
+             "sublabel": f"min {rec.min_fire_count} fires"},
+            {"label": "Hit Rate @ Rec",
+             "value": (f"{rec.recommended_hit_rate * 100:.1f}%"
+                       if rec.recommended is not None else "—"),
+             "accent": C_MOD,
+             "sublabel": (f"{rec.recommended_fire_count} fires"
+                          if rec.recommended is not None else "no eligible bar")},
+            {"label": "Current Bar", "value": cur_val, "accent": C_TEXT,
+             "sublabel": "override store"},
+            {"label": "Hit Rate @ Current", "value": cur_hr, "accent": C_TEXT2,
+             "sublabel": "apples-to-apples"},
+        ], columns=4)
+
+        st.caption(rec.reason)
+
+        # ── Candidate sweep grid (the recommended bar highlighted) ─────────
+        if rec.candidates:
+            headers = ["Threshold", "Fires", "Hits", "Hit Rate"]
+            rows = []
+            for s in rec.candidates:
+                is_rec = (rec.recommended is not None
+                          and abs(s.threshold - rec.recommended) < 1e-9)
+                below_floor = s.fire_count < rec.min_fire_count
+                thr_txt = f"{s.threshold:g}%" + ("  ★" if is_rec else "")
+                thr_color = C_HIGH if is_rec else (C_TEXT3 if below_floor else C_TEXT)
+                rate_color = (
+                    C_HIGH if (s.fire_count >= rec.min_fire_count and s.hit_rate >= 0.55)
+                    else (C_TEXT3 if below_floor else C_MOD)
+                )
+                rows.append([
+                    _sans(thr_txt, color=thr_color, weight=700 if is_rec else 600),
+                    _mono(str(s.fire_count),
+                          color=C_TEXT3 if below_floor else C_TEXT2, weight=600),
+                    _mono(str(s.hit_count), color=C_TEXT2, weight=600),
+                    _mono(f"{s.hit_rate * 100:.1f}%", color=rate_color, weight=700),
+                ])
+            wsj_market_table(headers, rows)
+            st.caption(
+                "★ = recommended bar. Greyed rows fired fewer than the floor and "
+                "are ineligible regardless of hit-rate."
+            )
+
+        # ── Apply (the reversible side-effect) ─────────────────────────────
+        if rec.recommended is not None:
+            if st.button(
+                f"Apply {rec.recommended:g}% to {atype}",
+                key="tuner_apply", type="primary",
+            ):
+                try:
+                    res = apply_recommended_threshold(atype, rec.recommended)
+                    if res is not None and getattr(res, "ok", False):
+                        if getattr(res, "had_prior", False):
+                            prior = res.prior_value
+                            st.success(
+                                f"Applied {rec.recommended:g}% to {atype} "
+                                f"(was {prior:g}% — reversible)."
+                            )
+                        else:
+                            st.success(
+                                f"Applied {rec.recommended:g}% to {atype} "
+                                "(no prior override — reset to default to undo)."
+                            )
+                    else:
+                        st.error("Could not apply the threshold (write failed).")
+                except Exception as exc:
+                    logger.exception("apply recommended threshold failed")
+                    st.error(f"Apply failed: {exc}")
+        else:
+            st.info(
+                "No threshold recommended — not enough historical fires clear the "
+                "floor to trust any candidate's hit-rate. Lower the floor or wait "
+                "for more alerts to accumulate."
+            )
+    except Exception:
+        logger.exception("Threshold tuner render failed")
+        st.error("Self-tuning thresholds panel unavailable.")
+
+
 def _render_delivery_channels() -> None:
     """Manage outbound delivery channels and trigger pending deliveries.
 
@@ -5052,6 +5204,7 @@ def render(
 
             _render_acknowledgment_analytics()
             _render_effectiveness_backtest()
+            _render_threshold_tuner()
 
             section_divider("Configuration")
             _render_calendar_subscription()

@@ -1216,3 +1216,214 @@ def _migrate_to_v28(conn: sqlite3.Connection) -> None:
         logger.warning(
             f"state.migrations: _migrate_to_v28 ALTER TABLE failed: {exc}"
         )
+
+
+# ─── Schema v28 → v29 ─────────────────────────────────────────────────────
+
+def _migrate_to_v29(conn: sqlite3.Connection) -> None:
+    """Add the ``positions`` table — a durable, per-user position ledger.
+
+    The portfolio book previously lived only in ``st.session_state`` seeded
+    from a hardcoded default list, so it evaporated on refresh and was
+    identical for every user. v29 persists positions per ``user_id`` with a
+    point-in-time history: an edit closes the prior open rows (stamps
+    ``closed_at``) and inserts the new set at ``version + 1`` rather than
+    overwriting, so the book is reconstructable as-of any past write.
+
+    The CREATE TABLE script is idempotent on its own (CREATE TABLE IF NOT
+    EXISTS + CREATE INDEX IF NOT EXISTS) so re-running on a fully-migrated DB
+    is a no-op — matches the v2 / v8 / v26 add-only pattern.
+    """
+    try:
+        from state.db import _SCHEMA_V29
+
+        conn.executescript(_SCHEMA_V29)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v29 CREATE TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v29 → v30 ─────────────────────────────────────────────────────
+
+def _migrate_to_v30(conn: sqlite3.Connection) -> None:
+    """Add ``users.is_active`` for the account disable/suspend kill-switch.
+
+    An admin (or ops) can disable an account; ``auth.users.login`` and
+    ``auth.tokens.verify_token`` then reject it, cutting off both interactive
+    logins and API tokens without deleting the row (so the audit trail and any
+    owned data stay intact). The column is ``INTEGER NOT NULL DEFAULT 1`` —
+    ``1`` = active, so every pre-v30 account is grandfathered active. Same
+    idempotent ALTER pattern as ``_migrate_to_v27`` / ``_migrate_to_v28``:
+    SQLite has no ``IF NOT EXISTS`` on ALTER TABLE, so we swallow the
+    duplicate-column error to stay safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v30 ALTER TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v30 → v31 ─────────────────────────────────────────────────────
+
+def _migrate_to_v31(conn: sqlite3.Connection) -> None:
+    """Add ``audit_events.prev_hash`` + ``row_hash`` for the audit hash-chain.
+
+    Each new audit row commits to all prior rows via
+    ``row_hash = SHA-256(prev_hash || canonical(row))`` so an in-place edit,
+    deletion, reorder, or insertion of an audit row breaks the chain and is
+    detectable by ``engine.audit_search.verify_chain``. Both columns default
+    to ``''`` so pre-v31 rows are grandfathered as ``unchained`` (the chain
+    starts at the first v31 row). Same idempotent ALTER pattern as
+    ``_migrate_to_v27`` / ``_migrate_to_v28`` / ``_migrate_to_v30``: each ADD
+    is independent and swallows the duplicate-column error so the migration is
+    safe to re-run on every open.
+    """
+    for col in ("prev_hash", "row_hash"):
+        try:
+            conn.execute(
+                f"ALTER TABLE audit_events ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v31 ALTER TABLE ({col}) failed: {exc}"
+            )
+
+
+# ─── Schema v31 → v32 ─────────────────────────────────────────────────────
+
+def _migrate_to_v32(conn: sqlite3.Connection) -> None:
+    """Add the ``signal_ledger`` table — a point-in-time track record.
+
+    Each row is one ``EquityIdea`` frozen AS ISSUED (ticker, direction,
+    conviction, weight_set, issue_date, issue_close), never refit. Marked
+    forward on real closes, this gives an honest, look-ahead-free equity-idea
+    track record — the thing the platform admits it has never had. Idempotent
+    CREATE TABLE / CREATE INDEX IF NOT EXISTS (same add-only pattern as
+    v26/v29), safe to re-run on every open.
+    """
+    try:
+        from state.db import _SCHEMA_V32
+
+        conn.executescript(_SCHEMA_V32)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v32 CREATE TABLE failed: {exc}"
+        )
+
+
+def _migrate_to_v33(conn: sqlite3.Connection) -> None:
+    """Add the ``data_fetches`` table — a per-fetch provenance ledger.
+
+    Each row stamps one feed fetch with its realness (kind: live/cache/
+    synthetic/empty), quality, row_count, a short content hash and the data's
+    as-of, so an auditor can prove which feeds were real when a signal issued.
+    Idempotent CREATE TABLE / CREATE INDEX IF NOT EXISTS (same add-only pattern
+    as v26/v29/v32), safe to re-run on every open.
+    """
+    try:
+        from state.db import _SCHEMA_V33
+
+        conn.executescript(_SCHEMA_V33)
+    except Exception as exc:
+        logger.warning(
+            f"state.migrations: _migrate_to_v33 CREATE TABLE failed: {exc}"
+        )
+
+
+# ─── Schema v33 → v34 ─────────────────────────────────────────────────────
+
+def _migrate_to_v34(conn: sqlite3.Connection) -> None:
+    """Add ``report_version`` + ``supersedes_id`` to ``report_history`` for
+    immutable report version / supersede-amend lineage (R119).
+
+    A report can no longer be edited in place — an amendment mints a NEW
+    immutable ``report_history`` row that LINKS back to its predecessor, so
+    the full version chain stays auditable. Two columns land in this
+    migration, both on ``report_history``:
+
+      * ``report_version`` — ``INTEGER NOT NULL DEFAULT 1``. The 1-indexed
+        position of this row in its lineage. Pre-v34 rows (and every
+        first-issue report) pick up the default 1, which matches the
+        implicit pre-feature meaning ("this is the original, un-amended
+        report"). An amendment writes ``previous.report_version + 1``.
+      * ``supersedes_id`` — ``TEXT`` (NULLable, no DEFAULT). The
+        ``report_id`` of the immediately-prior version this row supersedes.
+        NULL on purpose for a v1 / original report: at the SQL level a NULL
+        ``supersedes_id`` is the unambiguous "this is the head of the
+        chain" marker, distinguishable from an empty-string id. The
+        version-chain walk follows this column backwards (newest → oldest)
+        and terminates at the NULL.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v17`` / ``_migrate_to_v18``: SQLite
+    does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so each statement is
+    wrapped in try/except and "duplicate column name" errors are swallowed.
+    Each column is added in its own try/except so partial completion of a
+    prior run is also tolerated, and re-running on a fully-migrated DB is a
+    no-op.
+    """
+    for col_name, col_def in (
+        ("report_version", "INTEGER NOT NULL DEFAULT 1"),
+        ("supersedes_id", "TEXT"),
+    ):
+        try:
+            conn.execute(
+                f"ALTER TABLE report_history ADD COLUMN {col_name} {col_def}"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
+            logger.warning(
+                f"state.migrations: _migrate_to_v34 ALTER TABLE "
+                f"({col_name}) failed: {exc}"
+            )
+
+
+# ─── Schema v34 → v35 ─────────────────────────────────────────────────────
+
+def _migrate_to_v35(conn: sqlite3.Connection) -> None:
+    """Add ``report_history.content_hash`` for tamper-evident report bytes (R121).
+
+    Each saved report's rendered bytes are SHA-256'd on issue and the hex
+    digest is stored in this column. On read, the on-disk file's hash is
+    recomputed and compared against the stored value, so an auditor can prove
+    a distributed report's bytes match what was issued (a mismatch is logged
+    to the audit trail; a NULL-hash legacy row is honestly reported as
+    "unhashed", not "tampered").
+
+    The column is ``TEXT`` and NULLable (no ``NOT NULL DEFAULT ''``) on
+    purpose: NULL is the unambiguous "this row predates content-hashing, so
+    we cannot verify it" marker, distinguishable at the SQL level from an
+    empty-string hash. Pre-v35 rows pick up NULL and are reported as
+    ``unhashed`` rather than failing verification.
+
+    Same idempotent ALTER TABLE pattern as ``_migrate_to_v4`` /
+    ``_migrate_to_v5`` / ``_migrate_to_v17`` / ``_migrate_to_v34``: SQLite
+    does NOT support ``IF NOT EXISTS`` on ALTER TABLE, so the statement is
+    wrapped in try/except and "duplicate column name" errors are swallowed,
+    making the helper safe to re-run on every database open.
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE report_history ADD COLUMN content_hash TEXT"
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        logger.warning(
+            f"state.migrations: _migrate_to_v35 ALTER TABLE "
+            f"(content_hash) failed: {exc}"
+        )

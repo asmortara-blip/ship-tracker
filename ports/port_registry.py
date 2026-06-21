@@ -180,12 +180,30 @@ for _p in PORTS:
 # Countries that have multiple tracked ports (special handling in Comtrade)
 MULTI_PORT_COUNTRIES = {k for k, v in PORTS_BY_COUNTRY.items() if len(v) > 1}
 
-# Port throughput weights for splitting country-level trade data across ports
-# Values are approximate share of national container traffic (sums to 1.0 per country)
-PORT_TRAFFIC_WEIGHTS: dict[str, dict[str, float]] = {
+# Port throughput weights for splitting country-level trade data across ports.
+#
+# RAW values below are each port's *approximate share of national* container
+# traffic (e.g. USLAX really is ~22% of total US container throughput). For
+# countries whose tracked ports don't cover the whole nation, these RAW shares
+# sum to LESS than 1.0 (USA ~0.69, CHN ~0.95 — the remainder flows through
+# untracked ports). All consumers (worldbank_feed.get_teu_for_country,
+# port_teu_map._port_weight, comtrade_feed's WITS + WB-fallback paths) use a
+# weight as a SHARE that multiplies a *national* total. If the shares summed to
+# 0.69, ~31% of the USA's national TEU/trade would silently vanish off the map.
+#
+# So we renormalize at load time: ``PORT_TRAFFIC_WEIGHTS`` exposes each
+# country's split divided by its raw sum, so the tracked ports' weights sum to
+# exactly 1.0 and a country's national total is fully distributed across the
+# ports we actually track. The honest cost — that the tracked roster covers only
+# a fraction of the real nation — is preserved explicitly in
+# ``TRACKED_PORT_SHARE`` below (the raw sum), so the "missing 31%" is documented,
+# not silent. Single-port countries already summed to 1.0 (share 1.0).
+_RAW_PORT_TRAFFIC_WEIGHTS: dict[str, dict[str, float]] = {
     # USA: LA+LB ~37%, NY/NJ ~16%, Savannah ~10% of national container traffic
+    # (raw sum ~0.69 — the rest is Houston/Seattle/Norfolk/etc., untracked).
     "USA": {"USLAX": 0.22, "USLGB": 0.21, "USNYC": 0.16, "USSAV": 0.10},
     # China: Shanghai ~27%, Ningbo ~22%, Shenzhen ~18%, Qingdao ~15%, Tianjin ~13%
+    # (raw sum ~0.95 — the rest is Guangzhou/Xiamen/etc., untracked).
     "CHN": {"CNSHA": 0.27, "CNNBO": 0.22, "CNSZN": 0.18, "CNTAO": 0.15, "CNTXG": 0.13},
     # Hong Kong is a separate WB entity from China
     "HKG": {"HKHKG": 1.0},
@@ -205,6 +223,41 @@ PORT_TRAFFIC_WEIGHTS: dict[str, dict[str, float]] = {
     "GBR": {"GBFXT": 1.0},
     "BRA": {"BRSAO": 1.0},
 }
+
+# TRACKED_PORT_SHARE[country] = raw authored sum = the fraction of that nation's
+# container traffic that the tracked-port roster actually covers. 1.0 means full
+# coverage; < 1.0 means the tracked ports are only part of the nation (USA ~0.69,
+# CHN ~0.95). Exposed so the un-tracked share is explicit, not silent, and so a
+# consumer that wants the *national* total (not the tracked-port total) can
+# divide by it.
+TRACKED_PORT_SHARE: dict[str, float] = {
+    country: sum(ports.values()) for country, ports in _RAW_PORT_TRAFFIC_WEIGHTS.items()
+}
+
+
+def _normalize_traffic_weights(
+    raw: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Divide each country's port weights by their sum so they total exactly 1.0.
+
+    Idempotent (re-normalizing an already-normalized table is a no-op) and never
+    divides by zero (a country with a zero/empty split is passed through). The
+    tracked ports then fully distribute the national total among themselves.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for country, ports in raw.items():
+        total = sum(ports.values())
+        if total <= 0:
+            out[country] = dict(ports)
+            continue
+        out[country] = {locode: w / total for locode, w in ports.items()}
+    return out
+
+
+# Renormalized: every country's port weights sum to exactly 1.0 (within fp eps).
+PORT_TRAFFIC_WEIGHTS: dict[str, dict[str, float]] = _normalize_traffic_weights(
+    _RAW_PORT_TRAFFIC_WEIGHTS
+)
 
 
 def get_port(locode: str) -> Port | None:

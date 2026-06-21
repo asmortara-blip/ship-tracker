@@ -66,9 +66,16 @@ def analyze_commodity_signals(stock_data: dict) -> list[CommodityShippingSignal]
             close = df["close"].dropna()
             if len(close) < 2:
                 continue
-            current_price = float(close.iloc[-1])
-            price_30d_ago = float(close.iloc[-31]) if len(close) >= 31 else float(close.iloc[0])
-            change_30d = (current_price - price_30d_ago) / price_30d_ago if price_30d_ago != 0 else 0.0
+            current_price = float(close.iloc[-1])   # raw price → displayed level
+            # change_30d DRIVES the signal direction → look-ahead-free total-return
+            # basis (R127, close*adj_factor) so a split/distribution in the window
+            # isn't read as a fake ~±move. adj_factor defaults to 1.0 (unchanged
+            # for split-free names / fixtures).
+            from data.normalizer import adjusted_close
+            adj = adjusted_close(df).dropna()
+            adj_now = float(adj.iloc[-1])
+            adj_30d_ago = float(adj.iloc[-31]) if len(adj) >= 31 else float(adj.iloc[0])
+            change_30d = (adj_now - adj_30d_ago) / adj_30d_ago if adj_30d_ago != 0 else 0.0
 
             rises_bullish = meta["signal_direction_if_rising"] == "bullish"
             if rises_bullish:

@@ -618,20 +618,46 @@ def _render_real_signal_validation(stock_data: dict, insights: object) -> None:
     try:
         from processing.exposure_matrix import build_exposure_matrix
         from processing.shipping_stress_index import compute_shipping_stress
-        from processing.signal_validation import build_validation_report
-
-        # The Backtest tab has no pre-computed cascade in hand, so build the SSI
-        # and exposure matrix here, then run the real pipeline + validation. All
-        # of these tolerate empty inputs and return neutral defaults.
-        stress_report = compute_shipping_stress({}, {}, [], [], voyage_fleet=None)
-        exposure_matrix = build_exposure_matrix(stock_data)
-        report = build_validation_report(
-            stress_report, exposure_matrix, stock_data, insights=insights,
+        from processing.signal_validation import (
+            build_ledger_validation_report,
+            build_validation_report,
         )
+
+        # PREFER the causal, look-ahead-free validator (R016): it reads the
+        # FROZEN point-in-time ledger — ideas frozen AT ISSUE and marked only on
+        # strictly-later closes — so each row is a genuine out-of-sample outcome.
+        # Fall back to the synthetic re-run (which re-scores TODAY's ideas over
+        # PAST windows — look-ahead) only until the ledger has accrued marks.
+        report = build_ledger_validation_report(stock_data)
+        used_causal_ledger = report.n_signals_validated > 0
+        if not used_causal_ledger:
+            # The Backtest tab has no pre-computed cascade in hand, so build the
+            # SSI and exposure matrix here, then run the real pipeline +
+            # validation. All of these tolerate empty inputs.
+            stress_report = compute_shipping_stress({}, {}, [], [], voyage_fleet=None)
+            exposure_matrix = build_exposure_matrix(stock_data)
+            report = build_validation_report(
+                stress_report, exposure_matrix, stock_data, insights=insights,
+            )
     except Exception as e:
         logger.exception("tab_backtest: real-signal validation failed")
         st.warning(f"Real-signal validation unavailable: {e}")
         return
+
+    if used_causal_ledger:
+        st.success(
+            "Causal validator — scored against the **frozen point-in-time "
+            "ledger** (ideas frozen at issue, marked only on strictly-later "
+            "closes). No look-ahead.",
+            icon="✅",
+        )
+    else:
+        st.info(
+            "Look-ahead demo — no frozen ledger history yet, so this re-scores "
+            "today's ideas over past windows. The causal ledger validator "
+            "takes over once the daily freeze job accrues marks.",
+            icon="ℹ️",
+        )
 
     val_source = report.source or DataSource(
         name="Real-Signal Validator (synthetic history)",

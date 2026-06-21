@@ -107,6 +107,15 @@ _OVERSUPPLY_STRESS_RELIEF: float = 0.05
 # Threshold (in stress points) for calling a trajectory Improving / Worsening.
 _TREND_BAND: float = 0.04
 
+# Forward-interval dispersion bounds (rec R023). The 30d stress band half-width
+# (forecast_sigma) is blended from the MC rate-tail half-spread + the route's
+# own rate volatility (both mapped into stress points via _W_RATE), then clamped
+# here. A forward forecast is NEVER certain, so even a calm lane keeps the floor;
+# the ceiling stops a wild MC tail from blowing the band past plausibility. The
+# 7d band is the 30d sigma scaled by sqrt(7/30) (dispersion grows ~sqrt-time).
+_FORECAST_SIGMA_MIN: float = 0.03
+_FORECAST_SIGMA_MAX: float = 0.30
+
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
 
@@ -130,6 +139,13 @@ class StressForecast:
     rate_volatility: float = 0.0   # route's own monthly rate volatility (fraction)
     rate_signal_z: float = 0.0     # 30d rate move expressed in route-σ units
     structural_oversupply: bool = False  # high congestion + falling rates flag
+    # ── Honest forward intervals (rec R023) — every point ships a band ──────
+    # Illustrative ±1σ stress intervals (≈68%), the dispersion blended from the
+    # MC rate-tail half-spread + the route's own rate volatility, horizon-scaled.
+    # An interval that CAN be PIT/coverage-scored, not a fitted predictive band.
+    stress_7d_band: tuple = (0.0, 0.0)    # (low, high) in [0, 1]
+    stress_30d_band: tuple = (0.0, 0.0)   # (low, high) in [0, 1]
+    forecast_sigma: float = 0.0           # 30d stress dispersion (the band half-width)
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
@@ -681,6 +697,26 @@ def forecast_route_stress(
     if not drivers:
         drivers.append("No significant directional signal — stress projected flat")
 
+    # ── Honest forward intervals (R023) ──────────────────────────────────────
+    # 30d stress dispersion, in stress points, blended from two real sources:
+    #   * the MC rate-distribution half-spread (mc_p90 - mc_p10)/2, mapped into
+    #     stress via the same _W_RATE / _MC_TAIL_SATURATION the point estimate
+    #     uses, and
+    #   * the route's own rate volatility (a calm lane gets a tight band, a
+    #     swingy one a wide band),
+    # then clamped to [_FORECAST_SIGMA_MIN, _FORECAST_SIGMA_MAX] so the band is
+    # never degenerate and never absurd. ±1σ ≈ a 68% interval.
+    tail_halfspread = max(0.0, (mc_p90 - mc_p10)) / 2.0
+    tail_sigma = _W_RATE * tail_halfspread / _MC_TAIL_SATURATION
+    vol_sigma = _W_RATE * rate_vol
+    sigma_30d = min(_FORECAST_SIGMA_MAX,
+                    max(_FORECAST_SIGMA_MIN, tail_sigma + vol_sigma))
+    sigma_7d = sigma_30d * (7.0 / 30.0) ** 0.5
+    stress_7d_band = (round(_clamp01(stress_7d - sigma_7d), 4),
+                      round(_clamp01(stress_7d + sigma_7d), 4))
+    stress_30d_band = (round(_clamp01(stress_30d - sigma_30d), 4),
+                       round(_clamp01(stress_30d + sigma_30d), 4))
+
     narrative = _build_narrative(
         route_name, current, stress_7d, stress_30d, trend, rate_pct, mc_p90,
         mc_p10=mc_p10, structural_oversupply=structural_oversupply,
@@ -701,6 +737,9 @@ def forecast_route_stress(
         rate_volatility=round(rate_vol, 4),
         rate_signal_z=round(rate_signal_z, 4),
         structural_oversupply=structural_oversupply,
+        stress_7d_band=stress_7d_band,
+        stress_30d_band=stress_30d_band,
+        forecast_sigma=round(sigma_30d, 4),
     )
 
 

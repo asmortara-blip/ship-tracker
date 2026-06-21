@@ -9,7 +9,8 @@ Data current as of early 2026.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import List, Optional
 from loguru import logger
 
@@ -294,7 +295,11 @@ def risk_color(level: str) -> str:
 # compute_chokepoint_risk_score
 # ---------------------------------------------------------------------------
 
-def compute_chokepoint_risk_score() -> dict[str, float]:
+def compute_chokepoint_risk_score(
+    *,
+    escalation_ladder: bool = False,
+    ladder_horizon: int = 1,
+) -> dict[str, float]:
     """
     Return a composite risk score [0, 1] for every chokepoint.
 
@@ -305,7 +310,41 @@ def compute_chokepoint_risk_score() -> dict[str, float]:
         alt_penalty  = 1 / max(1, len(alternatives))  (fewer alts => higher risk)
         composite    = base_score * disrupt_mult * (1 + trade_weight) * (1 + alt_penalty) / 4
         clamped to [0, 1]
+
+    Escalation-ladder seam (R034) — OPT-IN, DEFAULT-COMPATIBLE
+    ---------------------------------------------------------
+    With ``escalation_ladder=False`` (the default) this function is BYTE-FOR-BYTE
+    the original deterministic model — the SSI and every existing test see the
+    exact same numbers.
+
+    With ``escalation_ladder=True`` we blend in the MODELED probabilistic
+    forward-escalation score from :mod:`processing.escalation_ladder`. That layer
+    maps each chokepoint's ``current_risk_level`` / ``current_disruption_type`` to
+    a ladder rung (DE_ESCALATING → TENSION → INCIDENT → PARTIAL → CLOSURE) and
+    rolls a conservative, *published* Markov chain ``ladder_horizon`` step(s)
+    forward, yielding a probability-weighted expected severity. We blend by
+    ``max(deterministic, ladder_expected)`` so a chokepoint with a real escalation
+    path scores ABOVE its current deterministic level (markets price the tail)
+    while the ladder can never DROP a score below its deterministic floor.
+
+    HONESTY: the ladder is a MODELED refinement (conservative published
+    transition probabilities — not a fitted hazard model, not a feed); see
+    ``escalation_ladder.PROVENANCE_NOTE``. It composes cleanly with the R007/R014
+    live overlay: that overlay escalates ``current_risk_level`` from REAL signal
+    *first*, and the ladder then prices the forward path off whatever level the
+    chokepoint currently sits at — it reads the level, never mutates the registry.
     """
+    ladder_results: dict = {}
+    if escalation_ladder:
+        try:
+            from processing.escalation_ladder import ladder_expected_scores
+            ladder_results = ladder_expected_scores(
+                CHOKEPOINTS, horizon=ladder_horizon
+            )
+        except Exception:  # pragma: no cover - defensive; never break the base
+            logger.exception("escalation ladder overlay failed; using base only")
+            ladder_results = {}
+
     scores: dict[str, float] = {}
     for key, cp in CHOKEPOINTS.items():
         base = _RISK_SCORE.get(cp.current_risk_level, 0.1)
@@ -314,7 +353,16 @@ def compute_chokepoint_risk_score() -> dict[str, float]:
         n_alts = max(1, len(cp.strategic_alternatives))
         alt_pen = 1.0 / n_alts
         raw = base * d_mult * (1.0 + trade_w) * (1.0 + alt_pen) / 4.0
-        scores[key] = min(1.0, raw)
+        composite = min(1.0, raw)
+
+        if escalation_ladder:
+            ladder = ladder_results.get(key)
+            ladder_expected = getattr(ladder, "expected_score", 0.0) if ladder else 0.0
+            # max() blend: the ladder can only RAISE risk (price the escalation
+            # tail), never lower the deterministic floor.
+            composite = min(1.0, max(composite, ladder_expected))
+
+        scores[key] = composite
         logger.debug(
             "Chokepoint risk score | {} => {:.3f} "
             "(base={:.2f}, trade_w={:.2f}, d_mult={:.2f}, alt_pen={:.2f})",
@@ -437,3 +485,134 @@ def get_current_active_disruptions() -> List[Chokepoint]:
         [cp.name for cp in active],
     )
     return active
+
+
+# ---------------------------------------------------------------------------
+# apply_live_chokepoint_risk — REAL-ONLY overlay (rec R014)
+# ---------------------------------------------------------------------------
+#
+# The chokepoint component is the TOP shipping-stress-index weight (~0.29), yet
+# every node's ``current_risk_level`` / ``current_disruption_type`` was 100%
+# hardcoded (suez=CRITICAL, hormuz=HIGH baked in). So the headline stress index
+# could not move when a chokepoint actually escalated. This overlay derives the
+# live risk from REAL feeds — GDELT country-level disruption-news VOLUME
+# (``data.gdelt_feed``, attributed to the chokepoint at country granularity — NOT
+# precise geolocation, NOT tone) and/or the existing live canal-transit feed
+# (``processing.canal_chokepoint_sync``) — and ESCALATES the baseline ONLY from
+# real signal, mirroring ``apply_live_canal_state``.
+#
+# HONESTY (this is the whole point — R014):
+#   * REAL-ONLY: a chokepoint is escalated ONLY from a real GDELT news-volume
+#     surge or a real (non-synthetic) canal anomaly. With no live data the
+#     hardcoded baseline stands, untouched, attributed "modeled".
+#   * NEVER DOWNGRADES: a real-but-calm GDELT read never lowers the modeled
+#     baseline (which encodes standing geopolitical context the news window may
+#     not reflect) — see ``gdelt_feed.escalate``.
+#   * NO MUTATION OF THE GLOBAL REGISTRY: the overlay reassigns the registry
+#     entry to a NEW ``Chokepoint`` via ``dataclasses.replace`` (same safety
+#     lesson as R007), and returns a sidecar realness map — the ``Chokepoint``
+#     dataclass has no realness field, so realness/as_of travel alongside.
+#   * Default (no live data) == EXACT current behavior (empty realness map).
+
+
+def apply_live_chokepoint_risk(chokepoints=None, *, gdelt_events=None,
+                               canal_stats=None, registry=None) -> dict:
+    """Overlay REAL chokepoint risk (GDELT + live canal) onto the registry.
+
+    For each chokepoint, ESCALATE ``current_risk_level`` /
+    ``current_disruption_type`` ONLY from real GDELT signal near its coords
+    and/or a real (non-synthetic) canal-transit anomaly; otherwise leave the
+    hardcoded baseline untouched. The registry entry is reassigned to a NEW
+    ``Chokepoint`` (``dataclasses.replace``) so the module-global is never
+    mutated in place.
+
+    Parameters
+    ----------
+    chokepoints
+        Iterable of (key, Chokepoint) pairs to consider. Defaults to the whole
+        registry. (Kept for symmetry with the task signature / testability.)
+    gdelt_events
+        A flat ``list`` of GDELT events (from ``data.gdelt_feed``) — or ``None``
+        / empty for the no-signal path. SYNTHETIC / unavailable feeds must pass
+        an empty list so absence is honestly treated as no escalation.
+    canal_stats
+        Optional list of ``CanalStats`` — delegated to the existing
+        ``apply_live_canal_state`` (real-only) for the two canal nodes.
+    registry
+        Defaults to the module-global ``CHOKEPOINTS``.
+
+    Returns
+    -------
+    dict
+        Per-chokepoint realness marker, e.g.::
+
+            {"suez": {"realness": "live", "risk_level": "CRITICAL",
+                      "disruption_type": "ACTIVE_CONFLICT",
+                      "source": "gdelt", "as_of": "..."}}
+
+        Only chokepoints whose baseline was ESCALATED by real data appear under
+        ``realness == "live"``; the canal delegate may also report ``"modeled"``
+        for a synthetic canal fallback. An empty dict == no live overlay.
+    """
+    from data.gdelt_feed import escalate, gdelt_chokepoint_signal
+
+    reg = CHOKEPOINTS if registry is None else registry
+    items = list(chokepoints) if chokepoints is not None else list(reg.items())
+    marker: dict[str, dict] = {}
+    as_of = datetime.now(timezone.utc).isoformat()
+
+    # 1) GDELT geo-event escalation (real-only — empty list => no-op).
+    for key, cp in items:
+        if cp is None or key not in reg:
+            continue
+        level, dtype, realness = gdelt_chokepoint_signal(
+            cp, gdelt_events or [], chokepoint_key=key)
+        if realness != "live" or level is None:
+            continue  # dark / no near events → keep modeled baseline, untouched
+        base_level = reg[key].current_risk_level
+        new_level = escalate(base_level, level)
+        if new_level == base_level and dtype in (None, "NONE", "LOW"):
+            # Real events present but they did not raise the baseline — record
+            # the real read for transparency, but do not rewrite the node.
+            continue
+        # Only adopt the derived disruption_type when we actually escalated;
+        # otherwise keep the baseline cause (don't overwrite a standing
+        # DIPLOMATIC/WEATHER label with a milder GDELT read).
+        new_dtype = dtype if new_level != base_level else reg[key].current_disruption_type
+        reg[key] = replace(
+            reg[key],
+            current_risk_level=new_level,
+            current_disruption_type=new_dtype,
+            disruption_since=(reg[key].disruption_since or as_of[:10]),
+        )
+        marker[key] = {
+            "realness": "live",
+            "risk_level": new_level,
+            "disruption_type": new_dtype,
+            "source": "gdelt",
+            "as_of": as_of,
+        }
+
+    # 2) Live canal-transit overlay (real-only) for the two canal nodes.
+    if canal_stats:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_canal_state
+            canal_marker = apply_live_canal_state(canal_stats, registry=reg)
+            for canal_key, m in canal_marker.items():
+                # canal_chokepoint_sync keys are canal names == registry keys.
+                existing = marker.get(canal_key)
+                if m.get("realness") == "live":
+                    m = {**m, "source": "canal", "as_of": as_of}
+                    # If GDELT already escalated this node higher, keep the worse.
+                    if existing and _RISK_SCORE.get(
+                        existing.get("risk_level", "LOW"), 0.0
+                    ) >= _RISK_SCORE.get(m.get("risk_level", "LOW"), 0.0):
+                        continue
+                    marker[canal_key] = m
+                elif existing is None:
+                    # Modeled canal fallback — report honestly, no node change.
+                    marker[canal_key] = {**m, "source": "canal", "as_of": as_of}
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("apply_live_chokepoint_risk: canal overlay skipped ({})", exc)
+
+    return marker

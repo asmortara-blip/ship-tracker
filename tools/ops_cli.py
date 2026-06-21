@@ -676,6 +676,34 @@ def _cmd_health_alerts_run_once(args: argparse.Namespace) -> None:
     _print_kv(counts)
 
 
+# ── users disable/enable (account kill-switch; R104 operator wrapper) ──────
+
+def _cmd_users_disable(args: argparse.Namespace) -> None:
+    from auth.audit import record_audit
+    from auth.users import deactivate_user
+
+    ok = deactivate_user(args.user_id)
+    if ok:
+        record_audit("disable_user", entity_type="user",
+                     entity_id=args.user_id, user_id="")
+    payload = {"user_id": args.user_id, "disabled": bool(ok),
+               "note": "" if ok else "user not found"}
+    _print_json(payload) if args.json else _print_kv(payload)
+
+
+def _cmd_users_enable(args: argparse.Namespace) -> None:
+    from auth.audit import record_audit
+    from auth.users import reactivate_user
+
+    ok = reactivate_user(args.user_id)
+    if ok:
+        record_audit("enable_user", entity_type="user",
+                     entity_id=args.user_id, user_id="")
+    payload = {"user_id": args.user_id, "enabled": bool(ok),
+               "note": "" if ok else "user not found"}
+    _print_json(payload) if args.json else _print_kv(payload)
+
+
 def _cmd_perf_budgets_list(args: argparse.Namespace) -> None:
     """List every budget + current observed p95 + within-budget status.
 
@@ -1007,12 +1035,13 @@ def _cmd_users_list(args: argparse.Namespace) -> None:
             "user_id":       u.user_id[:10],
             "username":      u.username,
             "role":          u.role,
+            "active":        "yes" if u.is_active else "NO",
             "created_at":    u.created_at,
             "last_login_at": u.last_login_at or "(never)",
         }
         for u in users
     ]
-    _print_table(rows, columns=["user_id", "username", "role", "created_at", "last_login_at"])
+    _print_table(rows, columns=["user_id", "username", "role", "active", "created_at", "last_login_at"])
 
 
 def _cmd_users_create(args: argparse.Namespace) -> None:
@@ -3287,6 +3316,16 @@ def _build_parser() -> argparse.ArgumentParser:
     su2.add_argument("--password", required=True, help="Min 8 chars")
     su2.add_argument("--json", action="store_true")
     su2.set_defaults(func=_cmd_users_create)
+
+    su3 = su.add_parser("disable", help="Disable an account (kill-switch)")
+    su3.add_argument("user_id", help="The user_id to disable")
+    su3.add_argument("--json", action="store_true")
+    su3.set_defaults(func=_cmd_users_disable)
+
+    su4 = su.add_parser("enable", help="Re-enable a disabled account")
+    su4.add_argument("user_id", help="The user_id to enable")
+    su4.add_argument("--json", action="store_true")
+    su4.set_defaults(func=_cmd_users_enable)
 
     # ── tokens ────────────────────────────────────────────────────────────
     p_tk = sub.add_parser("tokens", help="API-token subcommands")

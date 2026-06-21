@@ -112,6 +112,21 @@ def _conviction_from_momentum(chg: float) -> str:
 # Signal scanning on historical data
 # ---------------------------------------------------------------------------
 
+def _adj_prices(df: pd.DataFrame) -> np.ndarray:
+    """Look-ahead-free TOTAL-RETURN price path = ``close * adj_factor`` (R127).
+
+    ``adj_factor`` defaults to 1.0 when absent (fixtures / legacy frames) so
+    return math is unchanged there; on real data it folds in the forward
+    split/dividend adjustment without restating history. Use this for RETURN
+    computations; use the raw ``close`` for the reported transactable entry/exit
+    price (the real price you'd fill at)."""
+    raw = df["close"].values
+    if "adj_factor" in df.columns:
+        adj = pd.to_numeric(df["adj_factor"], errors="coerce").fillna(1.0).values
+        return raw * adj
+    return raw
+
+
 def _scan_momentum_signals(
     ticker: str,
     df: pd.DataFrame,
@@ -123,7 +138,8 @@ def _scan_momentum_signals(
     if df.empty or "close" not in df.columns:
         return trades
 
-    prices = df["close"].values
+    raw_prices = df["close"].values            # real price → reported entry/exit
+    prices = _adj_prices(df)                    # total-return path → return math
     dates = df["date"].values if "date" in df.columns else np.arange(len(prices))
     n = len(prices)
 
@@ -158,8 +174,8 @@ def _scan_momentum_signals(
                 signal_type="MOMENTUM",
                 entry_date=entry_date,
                 exit_date=exit_date,
-                entry_price=round(float(p_now), 2),
-                exit_price=round(float(p_exit), 2),
+                entry_price=round(float(raw_prices[i]), 2),
+                exit_price=round(float(raw_prices[exit_idx]), 2),
                 return_pct=round(float(ret), 2),
                 signal_expected_pct=expected,
                 hit=ret > 0,
@@ -180,7 +196,8 @@ def _scan_mean_reversion_signals(
     if df.empty or "close" not in df.columns:
         return trades
 
-    prices = df["close"].values
+    raw_prices = df["close"].values            # real price → reported entry/exit
+    prices = _adj_prices(df)                    # total-return path → return math
     dates = df["date"].values if "date" in df.columns else np.arange(len(prices))
     n = len(prices)
 
@@ -214,8 +231,8 @@ def _scan_mean_reversion_signals(
                 signal_type="MEAN_REVERSION",
                 entry_date=entry_date,
                 exit_date=exit_date,
-                entry_price=round(float(p_now), 2),
-                exit_price=round(float(p_exit), 2),
+                entry_price=round(float(raw_prices[i]), 2),
+                exit_price=round(float(raw_prices[exit_idx]), 2),
                 return_pct=round(float(ret), 2),
                 signal_expected_pct=expected,
                 hit=ret > 0,
@@ -238,21 +255,30 @@ def _scan_bdi_divergence_signals(
     if sector_df.empty or "close" not in sector_df.columns:
         return trades
 
-    # Align on dates
-    df2 = df.set_index("date")["close"] if "date" in df.columns else df["close"]
-    sec2 = sector_df.set_index("date")["close"] if "date" in sector_df.columns else sector_df["close"]
+    # Align on dates. The divergence + return math use the look-ahead-free
+    # total-return path (close*adj_factor); the reported entry/exit price uses
+    # the raw close. R127. adj_factor defaults to 1.0 so fixtures are unchanged.
+    def _adj_series(d: pd.DataFrame) -> pd.Series:
+        p = _adj_prices(d)
+        idx = pd.to_datetime(d["date"]) if "date" in d.columns else range(len(p))
+        return pd.Series(p, index=idx)
+
+    def _raw_series(d: pd.DataFrame) -> pd.Series:
+        return d.set_index("date")["close"] if "date" in d.columns else d["close"]
 
     try:
-        df2.index = pd.to_datetime(df2.index)
-        sec2.index = pd.to_datetime(sec2.index)
-        aligned = pd.concat([df2, sec2], axis=1, join="inner")
-        aligned.columns = ["stock", "sector"]
+        stock_adj = _adj_series(df); stock_adj.index = pd.to_datetime(stock_adj.index)
+        sec_adj = _adj_series(sector_df); sec_adj.index = pd.to_datetime(sec_adj.index)
+        stock_raw = _raw_series(df); stock_raw.index = pd.to_datetime(stock_raw.index)
+        aligned = pd.concat([stock_adj, sec_adj, stock_raw], axis=1, join="inner")
+        aligned.columns = ["stock", "sector", "stock_raw"]
         aligned = aligned.dropna().sort_index()
     except Exception:
         return trades
 
-    prices_stock = aligned["stock"].values
+    prices_stock = aligned["stock"].values     # adjusted → divergence + return
     prices_sector = aligned["sector"].values
+    raw_stock = aligned["stock_raw"].values    # raw → reported entry/exit price
     dates = aligned.index
     n = len(aligned)
 
@@ -292,8 +318,8 @@ def _scan_bdi_divergence_signals(
                 signal_type="MOMENTUM",
                 entry_date=entry_date,
                 exit_date=exit_date,
-                entry_price=round(float(p_s_now), 2),
-                exit_price=round(float(p_exit), 2),
+                entry_price=round(float(raw_stock[i]), 2),
+                exit_price=round(float(raw_stock[exit_idx]), 2),
                 return_pct=round(float(ret), 2),
                 signal_expected_pct=expected,
                 hit=ret > 0,

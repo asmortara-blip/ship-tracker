@@ -134,6 +134,7 @@ class BacktestResult:
     sharpe: float
     information_ratio: float  # sharpe vs. buy-and-hold y
     equity_curve: pd.Series = field(repr=False)
+    net_sharpe: float = 0.0   # net of an ASSUMED per-trade turnover cost (R103)
 
 
 # ── Guards ──────────────────────────────────────────────────────────────────
@@ -366,7 +367,12 @@ def walk_forward_backtest(
         )
     hold_max = hold_max or (lookback * 2)
 
+    from processing.cost_model import per_side_cost_bps
+    side_y = per_side_cost_bps(str(y.name or "")) / 1e4
+    side_x = per_side_cost_bps(str(x.name or "")) / 1e4
+
     pnl = np.zeros(n)
+    cost = np.zeros(n)   # assumed turnover cost charged at each entry/exit (R103)
     pos = 0     # -1, 0, +1 on the spread
     beta = 1.0
     alpha = 0.0
@@ -394,8 +400,11 @@ def walk_forward_backtest(
         if pos == 0:
             if z > entry_z:
                 pos, held = -1, 0
+                # Entry trades both legs: 1 unit of y + |β| units of x.
+                cost[t] += side_y + abs(beta) * side_x
             elif z < -entry_z:
                 pos, held = 1, 0
+                cost[t] += side_y + abs(beta) * side_x
         else:
             held += 1
             # realize one-period PnL from yesterday→today
@@ -404,6 +413,8 @@ def walk_forward_backtest(
             pnl[t] = pos * (dy - beta * dx)
             if abs(z) < exit_z or abs(z) > stop_z or held >= hold_max:
                 pos, held = 0, 0
+                # Exit unwinds both legs.
+                cost[t] += side_y + abs(beta) * side_x
 
     ret = pd.Series(pnl, index=y.index)
     equity = ret.cumsum()
@@ -414,6 +425,13 @@ def walk_forward_backtest(
     cum = float(equity.iloc[-1])
     std = float(ret.std(ddof=0))
     sharpe = 0.0 if std == 0 else float(ret.mean() / std * math.sqrt(252))
+
+    # Net of the assumed per-trade turnover cost (R103): each entry/exit trades
+    # both legs (1 unit y + |β| units x) at their per-side rate.
+    net_ret = pd.Series(pnl - cost, index=y.index)
+    net_std = float(net_ret.std(ddof=0))
+    net_sharpe = 0.0 if net_std == 0 else float(
+        net_ret.mean() / net_std * math.sqrt(252))
 
     bh_ret = np.log(y / y.shift(1)).iloc[lookback:].dropna()
     bh_sharpe = 0.0
@@ -431,6 +449,7 @@ def walk_forward_backtest(
         sharpe=sharpe,
         information_ratio=ir,
         equity_curve=equity,
+        net_sharpe=float(round(net_sharpe, 4)),
     )
 
 

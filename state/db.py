@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -283,11 +284,22 @@ DB_PATH: Path = Path(__file__).resolve().parent.parent / "cache" / "ship_tracker
 #       audit retention window (``retention_days``, default 30) so
 #       "what was muted yesterday?" stays answerable.
 #
+#  35 — adds ``report_history.content_hash`` (TEXT, NULLable) for
+#       tamper-evident report bytes (R121). On save, the rendered report
+#       bytes are SHA-256'd and the hex digest stored here; on read,
+#       ``utils.report_history.verify_report_integrity`` recomputes the
+#       on-disk file's hash and compares it against the stored value so an
+#       auditor can prove a distributed report's bytes match what was
+#       issued. A mismatch is best-effort audit-logged. The column is
+#       NULLable so legacy (pre-v35) rows are honestly reported as
+#       ``unhashed`` (cannot verify) rather than ``tampered``. Same
+#       idempotent ALTER-TABLE-in-try/except pattern as v34.
+#
 # v5 is held aside because this branch was authored in parallel with
 # another agent's schema bump. Per the digest-mode task spec, this
 # change takes the next available slot (v6) so both can ship without
 # colliding on the same version number.
-SCHEMA_VERSION: int = 28
+SCHEMA_VERSION: int = 35
 
 
 # ─── Connection cache ──────────────────────────────────────────────────────
@@ -329,6 +341,11 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Wait (up to 5s) for the write lock instead of failing instantly, so an
+    # explicit BEGIN IMMEDIATE under contention (e.g. the audit hash-chain
+    # head-read+insert, app vs scheduler) blocks rather than raising
+    # "database is locked".
+    conn.execute("PRAGMA busy_timeout=5000")
     global _schema_ready
     with _conn_lock:
         _all_conns.append(conn)
@@ -338,6 +355,42 @@ def get_connection() -> sqlite3.Connection:
     _tls._conn = conn
     logger.debug(f"state.db: opened thread-local SQLite at {DB_PATH}")
     return conn
+
+
+@contextmanager
+def immediate_transaction(conn: sqlite3.Connection):
+    """Atomic multi-statement write under autocommit.
+
+    Connections open with ``isolation_level=None`` (autocommit), where Python's
+    plain ``with conn:`` is a NO-OP for transactions — it never issues BEGIN, so
+    a block that runs MORE THAN ONE write (or a read-then-dependent-write like
+    SELECT-MAX-then-INSERT) is NOT atomic and can tear or interleave under
+    concurrency. Use this instead:
+
+        with immediate_transaction(conn):
+            conn.execute(...)   # close old rows
+            conn.execute(...)   # insert new rows
+
+    It runs ``BEGIN IMMEDIATE`` (taking the WAL write lock up front, so the
+    whole block is serialized across threads AND processes), ``COMMIT`` on
+    success, and ``ROLLBACK`` on any exception (then re-raises). If a
+    transaction is already open it joins it (no nested BEGIN), so callers
+    compose safely.
+    """
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        if own:
+            conn.execute("COMMIT")
+    except Exception:
+        if own:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001 — rollback best-effort
+                pass
+        raise
 
 
 def reset_for_tests() -> None:
@@ -1247,6 +1300,136 @@ _SCHEMA_V26_NOTE: str = (
 )
 
 
+_SCHEMA_V29 = """
+CREATE TABLE IF NOT EXISTS positions (
+    position_id  TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL DEFAULT '',
+    ticker       TEXT NOT NULL,
+    sector       TEXT,
+    shares       REAL NOT NULL DEFAULT 0,
+    avg_cost     REAL NOT NULL DEFAULT 0,
+    beta         REAL,
+    opened_at    TEXT NOT NULL,
+    closed_at    TEXT,
+    version      INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_positions_user_open
+    ON positions(user_id, closed_at);
+CREATE INDEX IF NOT EXISTS idx_positions_user_ticker
+    ON positions(user_id, ticker);
+"""
+
+_SCHEMA_V29_NOTE: str = (
+    "v29: positions table (position_id PK, user_id, ticker, sector, shares, "
+    "avg_cost, beta, opened_at, closed_at, version, updated_at) — a durable, "
+    "per-user, point-in-time position ledger (closed rows retained for history) "
+    "+ idx_positions_user_open (user_id, closed_at) + "
+    "idx_positions_user_ticker (user_id, ticker) "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v29)"
+)
+
+
+_SCHEMA_V32 = """
+CREATE TABLE IF NOT EXISTS signal_ledger (
+    ledger_id          TEXT PRIMARY KEY,
+    ticker             TEXT NOT NULL,
+    direction          TEXT NOT NULL,
+    conviction_score   REAL NOT NULL DEFAULT 0,
+    conviction_label   TEXT,
+    weight_set         TEXT,
+    issue_date         TEXT NOT NULL,
+    issue_close        REAL,
+    frozen_at          TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_ledger_dedup
+    ON signal_ledger(ticker, issue_date, direction);
+CREATE INDEX IF NOT EXISTS idx_signal_ledger_issue
+    ON signal_ledger(issue_date);
+"""
+
+_SCHEMA_V32_NOTE: str = (
+    "v32: signal_ledger table (ledger_id PK, ticker, direction, "
+    "conviction_score, conviction_label, weight_set, issue_date, issue_close, "
+    "frozen_at) — a point-in-time, never-refit record of each EquityIdea AS "
+    "ISSUED, marked forward on real closes for an honest track record + "
+    "unique (ticker, issue_date, direction) dedup index + idx_signal_ledger_issue "
+    "(added via CREATE TABLE IF NOT EXISTS in _migrate_to_v32)"
+)
+
+
+_SCHEMA_V33 = """
+CREATE TABLE IF NOT EXISTS data_fetches (
+    fetch_id     TEXT PRIMARY KEY,
+    source       TEXT NOT NULL,
+    cache_key    TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    quality      TEXT,
+    row_count    INTEGER NOT NULL DEFAULT 0,
+    byte_hash    TEXT,
+    as_of        TEXT,
+    fetched_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_data_fetches_source
+    ON data_fetches(source, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_data_fetches_fetched
+    ON data_fetches(fetched_at);
+"""
+
+_SCHEMA_V33_NOTE: str = (
+    "v33: data_fetches table (fetch_id PK, source, cache_key, kind "
+    "[live|cache|synthetic|empty], quality, row_count, byte_hash, as_of, "
+    "fetched_at) — a per-fetch provenance ledger so an auditor can answer 'did "
+    "signal X run on real or synthetic input on date Y' + idx on (source, "
+    "fetched_at) and fetched_at (added via CREATE TABLE IF NOT EXISTS in "
+    "_migrate_to_v33)"
+)
+
+
+# Schema v34 adds two columns to ``report_history`` for immutable report
+# version / supersede-amend lineage (R119). An amendment mints a NEW row that
+# LINKS to its predecessor instead of mutating the original, so the full
+# version chain stays auditable:
+#
+#   * ``report_version`` INTEGER NOT NULL DEFAULT 1 — 1-indexed position in
+#     the lineage. Pre-v34 rows + every original report pick up 1.
+#   * ``supersedes_id``  TEXT (NULLable) — the report_id of the immediately-
+#     prior version. NULL marks the head/original of a chain; the version-
+#     chain walk follows this column backwards and terminates at the NULL.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v17 — SQLite
+# does not support IF NOT EXISTS on ALTER TABLE. Each column is added in its
+# own try/except so partial completion of a prior run is also tolerated.
+# Added via ``_migrate_to_v34`` in ``state/migrations.py``.
+_SCHEMA_V34_NOTE: str = (
+    "v34: report_history.report_version INTEGER NOT NULL DEFAULT 1 + "
+    "report_history.supersedes_id TEXT (nullable) "
+    "(added via ALTER TABLE in _migrate_to_v34)"
+)
+
+
+# Schema v35 adds one NULLable column to ``report_history`` for tamper-evident
+# report bytes (R121):
+#
+#   * ``content_hash`` TEXT (NULLable) — the SHA-256 hex digest of the report's
+#     rendered bytes, computed AS ISSUED over the exact bytes written to disk.
+#     ``utils.report_history.verify_report_integrity`` recomputes the on-disk
+#     file's hash on read and compares it to this stored value, so an auditor
+#     can prove a distributed report's bytes match what was issued. A mismatch
+#     is best-effort audit-logged. NULL marks a legacy (pre-v35) row whose
+#     bytes were never hashed — honestly reported as ``unhashed`` (cannot
+#     verify), distinguishable at the SQL level from an empty-string hash and
+#     never reported as ``tampered``.
+#
+# Same idempotent ALTER-TABLE-in-try/except pattern as v4 / v5 / v17 / v34 —
+# SQLite does not support IF NOT EXISTS on ALTER TABLE. Added via
+# ``_migrate_to_v35`` in ``state/migrations.py``.
+_SCHEMA_V35_NOTE: str = (
+    "v35: report_history.content_hash TEXT (nullable) "
+    "(added via ALTER TABLE in _migrate_to_v35)"
+)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create tables if missing, then run any pending migrations."""
     conn.executescript(_SCHEMA_V1)
@@ -1474,6 +1657,77 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v28(conn)
     except Exception as exc:
         logger.warning(f"state.db: v28 column add skipped: {exc}")
+
+    # v29 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26). Adds the ``positions`` ledger so the portfolio book is
+    # durable + per-user instead of session-state-only. Runs unconditionally on
+    # every open (fresh DB: creates it; existing DB: no-op).
+    try:
+        from state.migrations import _migrate_to_v29
+        _migrate_to_v29(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v29 table add skipped: {exc}")
+
+    # v30 column add — idempotent ALTER-in-try/except (same as v27/v28). Adds
+    # ``users.is_active`` for the account disable/suspend kill-switch; default
+    # 1 grandfathers every existing account as active. Runs unconditionally.
+    try:
+        from state.migrations import _migrate_to_v30
+        _migrate_to_v30(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v30 column add skipped: {exc}")
+
+    # v31 column add — idempotent ALTER-in-try/except (same as v27/v28/v30).
+    # Adds ``audit_events.prev_hash`` + ``audit_events.row_hash`` for the
+    # tamper-evident hash-chain; defaults '' grandfather pre-v31 rows as
+    # unchained. Runs unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v31
+        _migrate_to_v31(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v31 column add skipped: {exc}")
+
+    # v32 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26/v29). Adds the ``signal_ledger`` point-in-time track-record
+    # table. Runs unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v32
+        _migrate_to_v32(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v32 table add skipped: {exc}")
+
+    # v33 new-table add — idempotent CREATE TABLE IF NOT EXISTS (same add-only
+    # pattern as v26/v29/v32). Adds the ``data_fetches`` per-fetch provenance
+    # ledger so every feed can stamp its realness (live/cache/synthetic). Runs
+    # unconditionally on every open.
+    try:
+        from state.migrations import _migrate_to_v33
+        _migrate_to_v33(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v33 table add skipped: {exc}")
+
+    # v34 column adds — idempotent ALTER-in-try/except (same as v4/v5/v17).
+    # Adds report_history.report_version + report_history.supersedes_id for
+    # immutable report version / supersede-amend lineage (R119). Runs
+    # unconditionally on every open (fresh DB: adds the columns; existing DB:
+    # no-op when present).
+    try:
+        from state.migrations import _migrate_to_v34
+        _migrate_to_v34(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v34 column adds skipped: {exc}")
+
+    # v35 column add — idempotent ALTER-in-try/except (same as v4/v5/v17/v34).
+    # Adds report_history.content_hash for tamper-evident report bytes (R121):
+    # the rendered report bytes are SHA-256'd on save and recomputed + compared
+    # on read. NULLable so legacy rows are honestly "unhashed", not "tampered".
+    # Runs unconditionally on every open (fresh DB: adds the column; existing
+    # DB: no-op when present).
+    try:
+        from state.migrations import _migrate_to_v35
+        _migrate_to_v35(conn)
+    except Exception as exc:
+        logger.warning(f"state.db: v35 column add skipped: {exc}")
 
     # Read current schema version (default 0 if no row yet).
     cur = conn.execute("SELECT value FROM kv_state WHERE key = 'schema_version'")
@@ -1836,6 +2090,78 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             _migrate_to_v28(conn)
         except Exception as exc:
             logger.warning(f"state.db: v28 migration skipped: {exc}")
+
+    # Migration 28 → 29: add the ``positions`` ledger table. Idempotent
+    # CREATE TABLE IF NOT EXISTS (add-only, same as v26) — the helper is
+    # already invoked unconditionally above; this branch keeps the
+    # version-step ladder explicit.
+    if current < 29:
+        try:
+            from state.migrations import _migrate_to_v29
+            _migrate_to_v29(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v29 migration skipped: {exc}")
+
+    # Migration 29 → 30: add ``users.is_active`` (account kill-switch).
+    # Idempotent ALTER-in-try/except (same as v27/v28) — the helper is already
+    # invoked unconditionally above; this keeps the version-step ladder explicit.
+    if current < 30:
+        try:
+            from state.migrations import _migrate_to_v30
+            _migrate_to_v30(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v30 migration skipped: {exc}")
+
+    # Migration 30 → 31: add audit_events.prev_hash + row_hash (audit
+    # hash-chain). Idempotent ALTER-in-try/except — the helper is already
+    # invoked unconditionally above; this keeps the version ladder explicit.
+    if current < 31:
+        try:
+            from state.migrations import _migrate_to_v31
+            _migrate_to_v31(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v31 migration skipped: {exc}")
+
+    # Migration 31 → 32: add the signal_ledger table. Idempotent CREATE TABLE
+    # IF NOT EXISTS (add-only, same as v26/v29).
+    if current < 32:
+        try:
+            from state.migrations import _migrate_to_v32
+            _migrate_to_v32(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v32 migration skipped: {exc}")
+
+    # Migration 32 → 33: add the data_fetches provenance ledger. Idempotent
+    # CREATE TABLE IF NOT EXISTS (add-only) — the helper is already invoked
+    # unconditionally above; this keeps the version-step ladder explicit.
+    if current < 33:
+        try:
+            from state.migrations import _migrate_to_v33
+            _migrate_to_v33(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v33 migration skipped: {exc}")
+
+    # Migration 33 → 34: add report_history.report_version + supersedes_id
+    # (immutable report version / supersede-amend lineage, R119). Idempotent
+    # ALTER-in-try/except — the helper is already invoked unconditionally
+    # above; this keeps the version-step ladder explicit.
+    if current < 34:
+        try:
+            from state.migrations import _migrate_to_v34
+            _migrate_to_v34(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v34 migration skipped: {exc}")
+
+    # Migration 34 → 35: add report_history.content_hash for tamper-evident
+    # report bytes (R121). Idempotent ALTER-in-try/except — the helper is
+    # already invoked unconditionally above; this keeps the version-step
+    # ladder explicit.
+    if current < 35:
+        try:
+            from state.migrations import _migrate_to_v35
+            _migrate_to_v35(conn)
+        except Exception as exc:
+            logger.warning(f"state.db: v35 migration skipped: {exc}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute(

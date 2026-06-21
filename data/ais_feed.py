@@ -100,6 +100,7 @@ def fetch_vessel_counts(
         source="ais",
     )
 
+    n_synth = 0
     if pw_data is not None and not pw_data.empty:
         for port in PORTS:
             port_rows = pw_data[pw_data["port_locode"] == port.locode]
@@ -107,13 +108,31 @@ def fetch_vessel_counts(
                 results[port.locode] = port_rows
                 continue
             results[port.locode] = _synthetic_congestion(port.locode)
+            n_synth += 1
     else:
         logger.info("IMF PortWatch unavailable — using calibrated synthetic vessel counts")
         for port in PORTS:
             results[port.locode] = _synthetic_congestion(port.locode)
+            n_synth += 1
+
+    # Provenance (R003/R097): the cache choke point only ever sees the REAL
+    # PortWatch fetch, so synthetic substitution would otherwise be invisible to
+    # the ledger. Stamp it here where the fallback actually happens.
+    if n_synth:
+        _stamp_synthetic("ais", "vessel_counts", n_synth)
 
     logger.info(f"Vessel data loaded for {len(results)} ports")
     return results
+
+
+def _stamp_synthetic(source: str, key: str, row_count: int) -> None:
+    """Best-effort 'synthetic' provenance stamp (R003/R097). Never raises."""
+    try:
+        from state.fetch_ledger import record_fetch
+        record_fetch(source, key, "synthetic", row_count=int(row_count),
+                     quality="DEMO")
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=3, max=10))

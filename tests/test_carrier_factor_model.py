@@ -142,7 +142,18 @@ def test_backtest_returns_finite_metrics() -> None:
     assert 0.0 <= bt.hit_rate <= 1.0
     assert math.isfinite(bt.sharpe)
     assert math.isfinite(bt.information_ratio)
+    assert 0.0 <= bt.psr <= 1.0  # probabilistic Sharpe haircut (R101)
     assert len(bt.equity_curve) == len(returns_df)
+
+
+def test_backtest_reports_net_of_cost_sharpe() -> None:
+    # R103: each position change is a trade of 1 unit of the carrier, charged at
+    # its per-side rate, so the result carries net_sharpe ≤ gross sharpe.
+    returns_df, factors_df, _ = _synthetic_panel(n=200, noise=0.02)
+    bt = residual_signal_backtest(returns_df["ZIM"], factors_df, lookback=52)
+    assert math.isfinite(bt.net_sharpe)
+    if bt.n_trades > 0:
+        assert bt.net_sharpe <= bt.sharpe
 
 
 def test_backtest_requires_enough_obs() -> None:

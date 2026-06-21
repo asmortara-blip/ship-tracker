@@ -10,6 +10,11 @@ from typing import Optional
 
 from loguru import logger
 
+# Atomic multi-statement writes under autocommit (save_alerts dedup loop,
+# save_rules replace, bulk_ack classify-then-update). A bare ``with conn:`` is
+# a no-op for transactions here — see state.db.immediate_transaction.
+from state.db import immediate_transaction
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dedup window
@@ -467,6 +472,64 @@ def check_company_concentration_alerts(
     return alerts
 
 
+def check_spof_dimension_alerts(
+    *,
+    book_weights: Optional[dict] = None,
+    fire_threshold: float = 0.45,
+    critical_threshold: float = 0.85,
+    top_in_body: int = 3,
+) -> list[ShippingAlert]:
+    """Fire when a book is single-point-of-failure-concentrated on ANY axis (R030).
+
+    Wraps ``processing.spof_radar.compute_spof_radar`` + ``spof_alerts`` over the
+    four risk axes (chokepoint / origin-region / carrier / commodity). Where
+    ``check_company_concentration_alerts`` only catches PORT concentration, this
+    catches a book that looks port-diversified yet is, say, 80 % Suez-dependent
+    or 90 % one-carrier.
+
+    ``book_weights`` is the user's ``{ticker: weight}`` book. When ``None``
+    (the default, scheduler path) it falls back to the tracked-universe
+    EQUAL-WEIGHT book — an honest "what does a fully-diversified book of the
+    tracked names look like on each axis?" baseline computed purely from the
+    registries (no hot fetch). A real book is passed in from the Portfolio path.
+
+    HHI bands (default thresholds, mirroring the port-concentration ladder):
+      * ``score >= 0.85``  → CRITICAL ("Single-Point Risk")
+      * ``score >= 0.45``  → HIGH    ("Concentrated")
+      * below              → no alert
+
+    Dedupe via the standard key uses ``route_id`` to carry the axis name, so a
+    book that stays concentrated on the same axis fires once per window, not
+    repeatedly. Never raises — any failure returns ``[]``.
+    """
+    try:
+        from processing.spof_radar import compute_spof_radar, spof_alerts
+    except Exception as exc:
+        logger.debug(f"check_spof_dimension_alerts: import failed: {exc}")
+        return []
+
+    try:
+        if book_weights is None:
+            # Honest default: equal-weight the tracked universe. Pure registry
+            # math — no prices, no live fetch on the hot path.
+            from processing.exposure_matrix import COMPANY_COMMODITY_EXPOSURE
+            tickers = list(COMPANY_COMMODITY_EXPOSURE.keys())
+            if not tickers:
+                return []
+            w = 1.0 / len(tickers)
+            book_weights = {t: w for t in tickers}
+        radar = compute_spof_radar(
+            book_weights,
+            fire_threshold=fire_threshold,
+            critical_threshold=critical_threshold,
+            top_in_body=top_in_body,
+        )
+        return list(spof_alerts(radar, fire_threshold=fire_threshold))
+    except Exception as exc:
+        logger.warning(f"check_spof_dimension_alerts: compute failed: {exc}")
+        return []
+
+
 def check_cargo_flow_anomaly_alerts(
     *,
     window_days: int = 14,
@@ -633,6 +696,70 @@ def check_world_graph_criticality_alerts(
         threshold=stress_threshold,
         change_pct=(alert.stress - stress_threshold) * 100.0,
     )]
+
+
+def check_ais_anomaly_alerts(
+    voyages: Optional[list] = None,
+    *,
+    max_alerts: int = 5,
+) -> list[ShippingAlert]:
+    """Fire AIS_ANOMALY alerts for the worst AIS-integrity anomalies (R049).
+
+    Wraps ``processing.ais_integrity.scan_fleet`` — coverage gaps inside a
+    high-risk geofence + kinematic-impossibility (teleport / position-spoof)
+    flags. The detection math is real (great-circle distance + vessel-type
+    speed bands), but it only fires on a REAL multi-point AIS track (a live
+    feed). On the SYNTHETIC modeled voyage fleet there is no real track to
+    scan, so ``scan_fleet`` returns ``[]`` and this function returns ``[]`` —
+    an honest no-op, NOT a manufactured alert. Real alerts appear only once a
+    live AIS feed supplies real tracks.
+
+    When real anomalies do surface, only the top ``max_alerts`` (severity-sorted
+    by ``scan_fleet``) become alerts so a noisy fleet cannot flood the store.
+    The anomalous vessel's IMO is carried in ``ticker`` (reusing the dedup-keyed
+    field so the SAME vessel anomaly fires once, not repeatedly); the voyage's
+    route in ``route_id``. Never raises — any failure returns ``[]``.
+    """
+    try:
+        from processing.ais_integrity import scan_fleet
+    except Exception as exc:
+        logger.debug(f"check_ais_anomaly_alerts: import failed: {exc}")
+        return []
+
+    try:
+        if voyages is None:
+            from data.voyage_dataset import build_voyage_fleet
+
+            voyages = build_voyage_fleet()
+        anomalies = scan_fleet(voyages)
+    except Exception as exc:
+        logger.warning(f"check_ais_anomaly_alerts: compute failed: {exc}")
+        return []
+
+    alerts: list[ShippingAlert] = []
+    for a in anomalies[: max(0, int(max_alerts))]:
+        try:
+            label = "Coverage gap" if a.kind == "GAP" else "Kinematic-impossibility"
+            vessel = a.vessel_name or a.imo or a.voyage_id or "vessel"
+            alerts.append(_make(
+                alert_type="AIS_ANOMALY",
+                severity=a.severity,
+                title=f"AIS {label} flag: {vessel} (MODELED)",
+                body=(
+                    f"{a.reason} ILLUSTRATIVE — detected on the synthetic modeled "
+                    f"voyage fleet, not a live AIS feed; not real intelligence "
+                    f"about a real ship."
+                ),
+                ticker=a.imo,
+                route_id=str(getattr(a, "voyage_id", "") or ""),
+                value=(
+                    a.gap_duration_hours if a.kind == "GAP" else a.implied_speed_kts
+                ),
+                threshold=(0.0 if a.kind == "GAP" else a.max_speed_kts),
+            ))
+        except Exception:
+            continue
+    return alerts
 
 
 def check_congestion_alerts(port_results: list, threshold: float = 0.75) -> list[ShippingAlert]:
@@ -856,6 +983,15 @@ def run_all_checks(
         all_alerts.extend(check_company_concentration_alerts())
     except Exception as exc:
         logger.warning(f"Company concentration alert check failed: {exc}")
+
+    # Multi-dimension SPOF radar (R030) — the port-only concentration check
+    # above misses a book that's port-diversified yet 80% one-chokepoint /
+    # one-origin / one-carrier / one-commodity. Defaults to the tracked-
+    # universe equal-weight book (pure registry math, no hot fetch).
+    try:
+        all_alerts.extend(check_spof_dimension_alerts())
+    except Exception as exc:
+        logger.warning(f"SPOF dimension alert check failed: {exc}")
 
     # Cargo flow anomaly alerts — per-route mix shift vs trailing window.
     # Requires the cargo_mix_history scheduler job to have accumulated
@@ -1081,7 +1217,7 @@ def save_alerts(
     ).isoformat()
 
     try:
-        with conn:
+        with immediate_transaction(conn):
             # Process alerts one at a time — the dedup lookup needs to
             # see the side-effects of earlier alerts in the same call
             # (so two identical-key alerts in one save_alerts list
@@ -1555,7 +1691,7 @@ def bulk_acknowledge_alerts(
         # whole function is by-contract non-raising.
         from state.db import get_connection
         conn = get_connection()
-        with conn:
+        with immediate_transaction(conn):
             # First classify each input id under the user's scope:
             #   already-acked → goes to skipped_already_acked
             #   unack         → eligible for the UPDATE
@@ -1894,7 +2030,7 @@ def save_rules(rules: list[dict], *, user_id: Optional[str] = None) -> None:
     uid = _resolve_user_id(user_id)
     conn = get_connection()
     try:
-        with conn:
+        with immediate_transaction(conn):
             if uid:
                 # Per-user replace: drop rows the user "owns" (their own
                 # + legacy) and rewrite them under this user. WHERE 1=1

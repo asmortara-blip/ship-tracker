@@ -374,3 +374,69 @@ def test_abnormal_return_uses_geometric_baseline_no_phantom_on_volatile_flat() -
     event_ts = dates[len(pre) - 1]            # anchor at the end of the pre-window
     res = event_study({"X": ser}, event_ts, pre=20, post=20)["X"]
     assert abs(res.abnormal_return) < 0.01, f"phantom abnormal return: {res.abnormal_return}"
+
+
+# ── S8: event_study_significance (inferential, cross-correlation-aware) ───────
+
+from processing.disruption_event_study import (  # noqa: E402
+    EventStudySignificance,
+    event_study_significance,
+)
+
+
+def _build_events(n_events, jump, *, n_tickers=4, seed=0, spacing=120, pad=120):
+    """Per-ticker business-day price series (gentle random walk) with a step of
+    ``jump`` applied STRICTLY AFTER each event position, so the post-window
+    captures it while the pre-window stays flat (abnormal_return ~ jump).
+    Returns (prices_by_ticker, event_dates) with events on exact business days."""
+    rng = np.random.default_rng(seed)
+    total = pad * 2 + spacing * (n_events - 1) + 1
+    idx = pd.bdate_range("2022-01-03", periods=total)
+    pos = [pad + spacing * i for i in range(n_events)]
+    eds = [idx[p] for p in pos]
+    prices = {}
+    for k in range(n_tickers):
+        s = pd.Series(100.0 * np.cumprod(1.0 + rng.normal(0.0, 0.008, len(idx))),
+                      index=idx)
+        for p in pos:
+            s.iloc[p + 1:] = s.iloc[p + 1:] * (1.0 + jump)   # step AFTER the anchor
+        prices[f"T{k}"] = s
+    return prices, eds
+
+
+def test_significance_detects_a_planted_abnormal_move():
+    prices, eds = _build_events(5, jump=0.10, n_tickers=4, seed=1)
+    sig = event_study_significance(prices, eds, pre=25, post=25)
+    assert isinstance(sig, EventStudySignificance)
+    assert sig.basis == "real" and sig.n_events == 5
+    assert sig.mean_abnormal_return > 0.05        # ~ the planted +10% (minus drift)
+    assert sig.significant and sig.p_value < 0.05
+    assert sig.ci_low > 0.0                        # CI excludes zero, correct side
+
+
+def test_no_signal_is_not_significant():
+    prices, eds = _build_events(5, jump=0.0, n_tickers=4, seed=2)
+    sig = event_study_significance(prices, eds, pre=25, post=25)
+    assert sig.basis == "real" and not sig.significant   # noise -> no fabricated edge
+
+
+def test_insufficient_events_is_honest_not_fabricated():
+    prices, eds = _build_events(2, jump=0.10, seed=3)
+    sig = event_study_significance(prices, eds, pre=25, post=25, min_events=3)
+    assert sig.basis == "insufficient" and not sig.significant
+    assert math.isnan(sig.mean_abnormal_return)
+
+
+def test_significance_is_deterministic():
+    prices, eds = _build_events(5, jump=0.06, seed=4)
+    a = event_study_significance(prices, eds, pre=25, post=25)
+    b = event_study_significance(prices, eds, pre=25, post=25)
+    assert (a.t_stat, a.p_value, a.ci_low, a.ci_high) == \
+           (b.t_stat, b.p_value, b.ci_low, b.ci_high)
+
+
+def test_estimation_sigma_is_populated():
+    prices, eds = _build_events(1, jump=0.0, seed=5)
+    res = event_study(prices, eds[0], pre=25, post=25)
+    assert res and all(math.isfinite(r.estimation_sigma) and r.estimation_sigma > 0
+                       for r in res.values())

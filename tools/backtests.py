@@ -22,6 +22,8 @@ Usage::
     python -m tools.backtests --format json     # one JSON blob
     python -m tools.backtests --format markdown # markdown table
     python -m tools.backtests --strict          # exit 1 on any flag failure
+    python -m tools.backtests --drift-strict     # + exit 1 on a HEADLINE-metric
+                                                 #   regression past tolerance (R027)
 
 The CLI does NOT take per-module flags — by design, this is the
 \"run them all\" path. For tuning a single validator use its Python
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -627,6 +630,66 @@ def _run_company_supply_risk() -> BacktestResult:
     )
 
 
+def _run_var_coverage() -> BacktestResult:
+    """VaR coverage (Kupiec POF) on REAL cached returns — the first risk number
+    checked against realized P&L. ``healthy`` only goes False on a genuine
+    miscalibration (the model is statistically REJECTED on real data); an empty
+    cache reports 'not evaluated' and stays vacuously healthy."""
+    from processing.var_coverage_backtest import run_var_coverage_backtest
+    r = run_var_coverage_backtest()
+
+    if r.basis != "real":
+        return BacktestResult(
+            name="VaR Coverage (Kupiec POF)",
+            headline_label="status",
+            headline_value="not evaluated (no cached price history)",
+            healthy=True,                       # vacuous — nothing to reject
+            summary=r.summary,
+            raw_fields={"basis": r.basis, "n_observations": r.n_observations},
+        )
+
+    # Conditional coverage RAISES the bar: a VaR that passes the Kupiec count
+    # but CLUSTERS its breaches (Christoffersen-rejected) is not healthy.
+    healthy = bool(r.well_calibrated) and not bool(r.breaches_clustered)
+    cc_label = (
+        "clustered" if r.breaches_clustered else
+        ("independent" if r.independence_assessable else "timing n/a")
+    )
+    return BacktestResult(
+        name="VaR Coverage (Kupiec POF)",
+        headline_label=f"{r.confidence*100:.0f}% VaR breach rate",
+        headline_value=(
+            f"{r.breach_rate*100:.1f}% vs {r.nominal_rate*100:.1f}% nominal "
+            f"({'calibrated' if healthy else 'REJECTED'}; breaches {cc_label})"
+        ),
+        healthy=healthy,
+        summary=r.summary,
+        raw_fields={
+            "n_observations": r.n_observations,
+            "n_breaches":     r.n_breaches,
+            "breach_rate":    round(r.breach_rate, 4),
+            "nominal_rate":   round(r.nominal_rate, 4),
+            "kupiec_lr":      round(r.kupiec_lr, 4),
+            "kupiec_pvalue":  round(r.kupiec_pvalue, 4),
+            "rejected":       bool(r.rejected),
+            "lr_independence": (round(r.lr_independence, 4)
+                                if r.lr_independence is not None else None),
+            "pvalue_independence": (round(r.pvalue_independence, 4)
+                                    if r.pvalue_independence is not None else None),
+            "independence_assessable": bool(r.independence_assessable),
+            "breaches_clustered":      bool(r.breaches_clustered),
+            "lr_conditional_coverage": (round(r.lr_conditional_coverage, 4)
+                                        if r.lr_conditional_coverage is not None else None),
+            "method":         r.method,
+            "window":         r.window,
+        },
+        scorecard_rows=[
+            {"label": t, "metric_name": "in book", "value": "yes"}
+            for t in r.tickers
+        ],
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -647,6 +710,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_capacity_demand_persistence,
     _run_spillover_graph_recall,
     _run_graph_centrality_dominance,
+    _run_var_coverage,
 ]
 
 
@@ -951,6 +1015,284 @@ def format_drift_report(
 
 
 # ---------------------------------------------------------------------------
+# R027 — per-metric baseline DRIFT gate (direction-aware, regression-only)
+# ---------------------------------------------------------------------------
+#
+# `--strict` flips a build red only when a validator's *boolean* healthy flag
+# is False. That flag is a hardcoded FLOOR (e.g. best sign-agreement >= 0.55),
+# so a real regression that stays above the floor — chokepoint sign-agreement
+# sliding 80.5% -> 56% — sails through CI silently. The platform's only
+# model-quality guard can't see drift ABOVE the floor.
+#
+# This gate closes that hole. It pins each validator's HEADLINE metric to a
+# committed baseline (`docs/backtest-headline-baseline.json`) and fails only
+# when the current value regresses past a per-metric tolerance IN THE WORSENING
+# DIRECTION. It is orthogonal to (and stacks on top of) both the floor check
+# AND the broader, two-sided `--compare-baseline` snapshot drift above:
+#
+#   * `--strict`            : floor flags (healthy=False)               [unchanged]
+#   * `--compare-baseline`  : two-sided drift on EVERY raw field        [unchanged]
+#   * R027 drift gate       : one-sided regression on the HEADLINE metric only
+#
+# Direction matters: a `higher_better` metric (sign-agreement, recovery rate,
+# spread) breaches when it DROPS more than the tolerance; a `lower_better`
+# metric (delay MAE) breaches when it RISES more than the tolerance.
+# Improvements NEVER breach — tightening the model can never fail the gate.
+#
+# The baseline is a REAL committed snapshot of the current run's headline
+# metrics. After an intentional model change, re-mint it with
+# ``--update-headline-baseline`` (the maintainable seam, mirroring the R120
+# MODEL_CHANGELOG re-hash step) and commit the new JSON in the same PR.
+
+# Where the committed headline baseline lives. Resolved relative to the repo
+# root (this file is ``tools/backtests.py``) so it works regardless of cwd.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HEADLINE_BASELINE_PATH = os.path.join(
+    _REPO_ROOT, "docs", "backtest-headline-baseline.json"
+)
+
+# The HEADLINE metric per validator: the single number whose regression means
+# "the model got materially worse". Maps
+#   validator name -> {raw_field: (direction, absolute_tolerance)}
+# Direction is "higher_better" or "lower_better". Tolerance is an ABSOLUTE
+# drift in the metric's own units (a fraction for rates/spreads, days for MAE).
+#
+# Tolerances are sized to the metric's natural noise floor:
+#   * rate / spread fractions (sign-agreement, recovery, pass-rate, big spreads)
+#     -> 0.05 (5 percentage points) — smaller is run-to-run jitter, not drift;
+#   * tight calibration spreads (leading-indicator / news bullish-vs-bearish,
+#     forecast 30d MAE) -> 0.02, because their healthy band is itself small;
+#   * ETA delay MAE (days) -> 0.30 day, the spacing between adjacent quality
+#     rungs in that validator's synthetic ladder.
+# VaR Coverage is intentionally ABSENT: its basis flips real/synthetic with the
+# live price cache, so a committed headline baseline would be non-deterministic.
+_HEADLINE_METRICS: dict[str, dict[str, tuple[str, float]]] = {
+    "SSI Component Predictiveness":       {"best_rate": ("higher_better", 0.05)},
+    "SCHI Dimension Predictiveness":      {"best_rate": ("higher_better", 0.05)},
+    "Disruption Forecast Accuracy":       {"mean_sa_30d":  ("higher_better", 0.05),
+                                           "mean_mae_30d": ("lower_better",  0.02)},
+    "Momentum Ranker Ladder":             {"spread_strong_vs_weak": ("higher_better", 0.05)},
+    "Leading Indicators Calibration":     {"spread_bullish_vs_bearish": ("higher_better", 0.02)},
+    "News Sentiment Calibration":         {"spread_bullish_vs_bearish": ("higher_better", 0.02)},
+    "Vulnerability Scorer Monotonicity":  {"spread_critical_vs_low": ("higher_better", 0.05)},
+    "ETA Predictor Accuracy":             {"delay_mae":            ("lower_better",  0.30),
+                                           "delay_sign_agreement": ("higher_better", 0.05)},
+    "Port Supply Lines Stability":        {"overall_mean_stability": ("higher_better", 0.05)},
+    "Company Supply Risk Stability":      {"overall_mean_stability": ("higher_better", 0.05)},
+    "SSI Lag-Correlation Recovery":       {"recovery_rate": ("higher_better", 0.05)},
+    "Historical Event Replay":            {"pass_rate": ("higher_better", 0.05)},
+    "Snapshot Diff Anomaly Recovery":     {"mean_recovery_rate": ("higher_better", 0.05)},
+    "Cargo-Flow JSD Stability":           {"pass_rate": ("higher_better", 0.05)},
+    "Capacity-Demand Persistence":        {"pass_rate": ("higher_better", 0.05)},
+    "Spillover Graph Recall":             {"pass_rate": ("higher_better", 0.05)},
+    "Graph Centrality Dominance":         {"pass_rate": ("higher_better", 0.05)},
+}
+
+
+@dataclass
+class DriftBreach:
+    """One headline metric that regressed past its tolerance, OR a metric with
+    no baseline to compare against.
+
+    ``kind`` is ``"regression"`` for a true worsening breach, or
+    ``"no baseline"`` when the metric is absent from the committed baseline
+    (a maintenance signal — surfaced, but NOT a breach for exit-code purposes).
+    """
+
+    validator: str
+    metric: str
+    direction: str          # "higher_better" | "lower_better"
+    baseline: float | None
+    current: float | None
+    delta: float | None     # signed: current - baseline (None for 'no baseline')
+    tolerance: float | None
+    kind: str               # "regression" | "no baseline"
+
+    @property
+    def is_breach(self) -> bool:
+        """Only a true regression counts toward the exit code; 'no baseline'
+        is reported for maintainability but never fails the gate on its own."""
+        return self.kind == "regression"
+
+
+def build_headline_baseline(results: list[BacktestResult]) -> dict:
+    """Mint the committed headline baseline payload from a current run.
+
+    Walks ``_HEADLINE_METRICS`` and pulls each validator's headline metric
+    value out of the live ``results``, recording the value + direction +
+    tolerance. A validator/metric not present in this run is simply omitted
+    (it will surface as 'no baseline' on the comparison side). Returns the
+    JSON-serialisable dict written to :data:`HEADLINE_BASELINE_PATH`.
+    """
+    by_name = {r.name: r for r in results}
+    metrics: dict[str, dict[str, Any]] = {}
+    for validator, spec in _HEADLINE_METRICS.items():
+        r = by_name.get(validator)
+        if r is None:
+            continue
+        for metric, (direction, tol) in spec.items():
+            val = (r.raw_fields or {}).get(metric)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                continue
+            metrics[f"{validator} :: {metric}"] = {
+                "validator":  validator,
+                "metric":     metric,
+                "baseline":   float(val),
+                "direction":  direction,
+                "tolerance":  float(tol),
+            }
+    return {
+        "schema": "ship.backtest.headline-baseline/1",
+        "description": (
+            "Per-metric, direction-aware regression baseline (R027). Each entry "
+            "pins a validator's HEADLINE metric; --drift-strict fails CI when the "
+            "current value regresses past 'tolerance' in the worsening direction. "
+            "Improvements never breach. Re-mint with "
+            "`python -m tools.backtests --update-headline-baseline` after an "
+            "intentional model change."
+        ),
+        "n_metrics": len(metrics),
+        "metrics": metrics,
+    }
+
+
+def save_headline_baseline(results: list[BacktestResult], path: str) -> None:
+    """Write the headline baseline JSON for ``results`` to ``path``."""
+    payload = build_headline_baseline(results)
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, indent=2, sort_keys=True)
+        fp.write("\n")
+
+
+def load_headline_baseline(path: str) -> dict:
+    """Load the committed headline baseline JSON from ``path``. Raises
+    ``OSError`` / ``json.JSONDecodeError`` on a missing/corrupt file."""
+    with open(path, "r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+def check_drift(
+    results: list[BacktestResult],
+    baseline: dict,
+    *,
+    tolerance: float | None = None,
+) -> list[DriftBreach]:
+    """Compare each validator's HEADLINE metric to its committed baseline,
+    direction-aware. Returns one :class:`DriftBreach` per regression, plus one
+    'no baseline' entry per headline metric the baseline does not cover.
+
+    A breach is recorded when the current value regresses past the tolerance
+    IN THE WORSENING DIRECTION:
+
+      * ``higher_better``  breaches when  ``baseline - current  > tol``
+        (the metric dropped by more than the tolerance);
+      * ``lower_better``   breaches when  ``current  - baseline > tol``
+        (the metric rose by more than the tolerance).
+
+    An improvement (or any move within tolerance) NEVER breaches. ``tolerance``
+    overrides the per-metric tolerance from the baseline when given (a single
+    global override, mainly for tests).
+
+    A headline metric in ``_HEADLINE_METRICS`` that is missing from the
+    baseline — or missing from the current run — is recorded as a
+    ``kind="no baseline"`` entry (reported, not a breach).
+    """
+    by_name = {r.name: r for r in results}
+    baseline_metrics = (baseline or {}).get("metrics", {}) or {}
+
+    breaches: list[DriftBreach] = []
+    for validator, spec in _HEADLINE_METRICS.items():
+        r = by_name.get(validator)
+        for metric, (direction, default_tol) in spec.items():
+            key = f"{validator} :: {metric}"
+            entry = baseline_metrics.get(key)
+            current = (r.raw_fields or {}).get(metric) if r is not None else None
+            current_num = (
+                float(current)
+                if isinstance(current, (int, float)) and not isinstance(current, bool)
+                else None
+            )
+
+            # No committed baseline for this metric → maintenance signal.
+            if entry is None or not isinstance(entry.get("baseline"), (int, float)):
+                breaches.append(DriftBreach(
+                    validator=validator, metric=metric, direction=direction,
+                    baseline=None, current=current_num, delta=None,
+                    tolerance=None, kind="no baseline",
+                ))
+                continue
+
+            base_val = float(entry["baseline"])
+            # Direction from the committed baseline wins (it's what was minted),
+            # falling back to the spec; tolerance honours the global override.
+            entry_dir = str(entry.get("direction") or direction)
+            tol = (
+                float(tolerance) if tolerance is not None
+                else float(entry.get("tolerance", default_tol))
+            )
+
+            # Current run produced no usable value for a metric we DO have a
+            # baseline for → can't confirm it held → report as 'no baseline'.
+            if current_num is None:
+                breaches.append(DriftBreach(
+                    validator=validator, metric=metric, direction=entry_dir,
+                    baseline=base_val, current=None, delta=None,
+                    tolerance=tol, kind="no baseline",
+                ))
+                continue
+
+            delta = current_num - base_val           # signed
+            # A tiny epsilon keeps a drop/rise of EXACTLY the tolerance from
+            # flipping to a breach on binary-FP rounding (0.80 - 0.75 lands at
+            # 0.05000000000000004 > 0.05). The gate is about real drift, not
+            # sub-femto float noise.
+            _EPS = 1e-9
+            if entry_dir == "lower_better":
+                regressed = (current_num - base_val) > tol + _EPS   # rose too much
+            else:                                    # higher_better (default)
+                regressed = (base_val - current_num) > tol + _EPS   # dropped too much
+
+            if regressed:
+                breaches.append(DriftBreach(
+                    validator=validator, metric=metric, direction=entry_dir,
+                    baseline=base_val, current=current_num, delta=delta,
+                    tolerance=tol, kind="regression",
+                ))
+
+    return breaches
+
+
+def format_drift_gate_report(breaches: list[DriftBreach]) -> str:
+    """Human-readable summary of the R027 headline-drift gate."""
+    regressions = [b for b in breaches if b.is_breach]
+    no_baseline = [b for b in breaches if b.kind == "no baseline"]
+    lines: list[str] = []
+    if regressions:
+        lines.append(
+            f"Headline-drift gate: {len(regressions)} regression(s) beyond "
+            f"tolerance:"
+        )
+        for b in regressions:
+            arrow = "↓" if b.direction == "higher_better" else "↑"
+            lines.append(
+                f"  [BREACH] {b.validator} :: {b.metric} ({b.direction}) "
+                f"{b.baseline} → {b.current} "
+                f"(Δ={b.delta:+.4f} {arrow}, tolerance ±{b.tolerance:.4f})"
+            )
+    else:
+        lines.append("Headline-drift gate: no regression beyond tolerance.")
+    if no_baseline:
+        lines.append("")
+        lines.append(
+            f"  {len(no_baseline)} headline metric(s) with no committed "
+            f"baseline (re-mint with --update-headline-baseline):"
+        )
+        for b in no_baseline:
+            lines.append(f"    - {b.validator} :: {b.metric}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1003,6 +1345,37 @@ def main(argv: list[str] | None = None) -> int:
             "the per-metric tolerance."
         ),
     )
+    parser.add_argument(
+        "--drift-strict",
+        action="store_true",
+        help=(
+            "R027 headline-drift gate. In addition to the --strict floor "
+            "checks, exit 1 if any validator's HEADLINE metric has REGRESSED "
+            "past its per-metric tolerance vs the committed baseline "
+            "(docs/backtest-headline-baseline.json). Direction-aware: "
+            "improvements never fail. Implies --strict."
+        ),
+    )
+    parser.add_argument(
+        "--headline-baseline",
+        metavar="PATH",
+        default=HEADLINE_BASELINE_PATH,
+        help=(
+            "Path to the committed headline baseline JSON used by "
+            "--drift-strict / --update-headline-baseline "
+            "(default: docs/backtest-headline-baseline.json)."
+        ),
+    )
+    parser.add_argument(
+        "--update-headline-baseline",
+        action="store_true",
+        help=(
+            "Re-mint the headline baseline JSON (at --headline-baseline) from "
+            "the current run and exit. Run this after an INTENTIONAL model "
+            "change, then commit the regenerated file in the same PR — the "
+            "maintainable seam for the R027 drift gate."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Mutually exclusive: --save-baseline takes precedence over --compare.
@@ -1012,6 +1385,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     results = run_all_backtests()
+
+    if args.update_headline_baseline:
+        try:
+            save_headline_baseline(results, args.headline_baseline)
+        except OSError as exc:
+            print(f"error: cannot write headline baseline "
+                  f"{args.headline_baseline!r}: {exc}", file=sys.stderr)
+            return 2
+        payload = build_headline_baseline(results)
+        print(f"Re-minted headline baseline ({payload['n_metrics']} metric(s)) "
+              f"to {args.headline_baseline}")
+        return 0
 
     if args.save_baseline:
         try:
@@ -1044,7 +1429,27 @@ def main(argv: list[str] | None = None) -> int:
     else:  # markdown
         print(format_markdown(results))
 
-    if args.strict and any(not r.healthy for r in results):
+    # --drift-strict implies --strict: the headline-drift gate stacks ON TOP of
+    # the floor check, it never replaces it.
+    strict = args.strict or args.drift_strict
+    floor_failed = strict and any(not r.healthy for r in results)
+
+    drift_failed = False
+    if args.drift_strict:
+        try:
+            baseline = load_headline_baseline(args.headline_baseline)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: cannot read headline baseline "
+                  f"{args.headline_baseline!r}: {exc}", file=sys.stderr)
+            return 2
+        breaches = check_drift(results, baseline)
+        # Print the gate report alongside the main report so a red build
+        # explains itself.
+        print()
+        print(format_drift_gate_report(breaches))
+        drift_failed = any(b.is_breach for b in breaches)
+
+    if floor_failed or drift_failed:
         return 1
     return 0
 

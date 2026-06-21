@@ -80,6 +80,12 @@ class BacktestResult:
     max_drawdown: float                    # negative number, e.g. −0.18 = −18%
     final_equity: float                    # ending value of $1 invested at t=0
     equity_curve: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    # Net of an ASSUMED per-rebalance turnover cost (R103). 0.0 when not computed.
+    net_annualized_return: float = 0.0
+    net_sharpe: float = 0.0
+    # Annual one-sided steady-state turnover (Σ|Δw|/2), EXCLUDING the one-time
+    # initial book establishment from cash — that is still charged in the cost.
+    turnover_per_year: float = 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -347,18 +353,32 @@ def walk_forward_backtest(
          - Realize the actual returns over the holding period.
     2. Step ``t`` forward by ``rebal_freq`` and repeat.
 
-    Each rebalance pays no transaction cost (intentional — keeps the
-    benchmark interpretable; net-of-cost analysis lives downstream).
+    Gross stats charge no transaction cost (the interpretable benchmark). The
+    result also carries NET stats (``net_sharpe`` / ``net_annualized_return``)
+    that deduct an ASSUMED per-rebalance turnover cost — Σ|Δw| at each ticker's
+    per-side rate from ``processing.cost_model`` — charged once on each
+    rebalance day. This is R103's net-of-cost analysis; costs are assumed, not
+    measured (a conservative stress test). ``turnover_per_year`` reports
+    conventional one-sided steady-state turnover (Σ|Δw|/2), excluding the
+    one-time from-cash book establishment (which IS still costed).
     """
     if returns_df is None or returns_df.empty:
         return _empty_backtest()
     if returns_df.shape[0] < train_window + rebal_freq:
         return _empty_backtest()
 
+    from processing.cost_model import per_side_cost_bps
+
+    cols = list(returns_df.columns)
+    per_side = np.array([per_side_cost_bps(c) for c in cols])  # bps per ticker
+
     n_rows = returns_df.shape[0]
     realized: list[float] = []
+    costs: list[float] = []
     dates: list = []
     n_rebalances = 0
+    total_turnover = 0.0
+    prev_w = np.zeros(len(cols))
     t = train_window
 
     while t + rebal_freq <= n_rows:
@@ -374,12 +394,24 @@ def walk_forward_backtest(
             t += rebal_freq
             continue
 
-        weights = np.array([opt.weights[c] for c in returns_df.columns])
+        weights = np.array([opt.weights[c] for c in cols])
+        # Per-rebalance turnover cost: Σ|Δw| at each ticker's per-side rate,
+        # charged once on the rebalance day (the first day of the hold period).
+        # This INCLUDES the first rebalance's from-cash establishment (prev_w=0)
+        # — you pay to enter the book.
+        dw = np.abs(weights - prev_w)
+        rebal_cost = float(np.sum(dw * per_side) / 1e4)
+        # The reported turnover METRIC, by contrast, is steady-state churn: skip
+        # the one-time establishment so it doesn't dominate short windows.
+        if n_rebalances > 0:
+            total_turnover += float(dw.sum())
+        prev_w = weights
         # Hold for rebal_freq days at fixed weights.
         hold = returns_df.iloc[t : t + rebal_freq].to_numpy()
         portfolio_returns = hold @ weights
         for d_idx in range(rebal_freq):
             realized.append(float(portfolio_returns[d_idx]))
+            costs.append(rebal_cost if d_idx == 0 else 0.0)
             dates.append(returns_df.index[t + d_idx])
         n_rebalances += 1
         t += rebal_freq
@@ -397,6 +429,17 @@ def walk_forward_backtest(
     drawdown = (equity - running_peak) / running_peak
     max_dd = float(drawdown.min()) if not drawdown.empty else 0.0
 
+    # Net of the assumed per-rebalance turnover cost (R103).
+    net_returns = returns - pd.Series(costs, index=pd.Index(dates))
+    net_ann_ret = float(net_returns.mean() * TRADING_DAYS_PER_YEAR)
+    net_ann_vol = float(net_returns.std(ddof=0) * math.sqrt(TRADING_DAYS_PER_YEAR))
+    net_sharpe = (net_ann_ret - rf) / net_ann_vol if net_ann_vol > 0 else 0.0
+    n_days = len(returns)
+    # Σ|Δw| counts both the buy and the sell of each rebalance → halve it for the
+    # conventional one-sided turnover figure.
+    turnover_per_year = (
+        total_turnover / 2.0 / n_days * TRADING_DAYS_PER_YEAR if n_days else 0.0)
+
     return BacktestResult(
         n_rebalances=n_rebalances,
         annualized_return=float(round(ann_ret, 6)),
@@ -405,6 +448,9 @@ def walk_forward_backtest(
         max_drawdown=float(round(max_dd, 4)),
         final_equity=float(round(equity.iloc[-1], 6)),
         equity_curve=equity,
+        net_annualized_return=float(round(net_ann_ret, 6)),
+        net_sharpe=float(round(net_sharpe, 4)),
+        turnover_per_year=float(round(turnover_per_year, 4)),
     )
 
 

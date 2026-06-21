@@ -60,9 +60,12 @@ python -m tools.backtests
 | Arg | Required | Default | Choices | Help |
 | --- | --- | --- | --- | --- |
 | `--compare-baseline` |  | — |  | Run the validators and report drift vs the JSON snapshot at PATH (previously written by --save-baseline). Exits 1 on any healthy-flag flip or raw-field drift beyond the per-metric tolerance. |
+| `--drift-strict` |  | false |  | R027 headline-drift gate. In addition to the --strict floor checks, exit 1 if any validator's HEADLINE metric has REGRESSED past its per-metric tolerance vs the committed baseline (docs/backtest-headline-baseline.json). Direction-aware: improvements never fail. Implies --strict. |
 | `--format` |  | `text` | `text`, `json`, `markdown` | Output format (default: text). |
+| `--headline-baseline` |  | — |  | Path to the committed headline baseline JSON used by --drift-strict / --update-headline-baseline (default: docs/backtest-headline-baseline.json). |
 | `--save-baseline` |  | — |  | Run the validators and write a JSON snapshot to PATH. The snapshot captures every validator's healthy flag + headline + raw_fields and is the reference for --compare-baseline. Does not print the normal report. |
 | `--strict` |  | false |  | Exit 1 if any validator reports healthy=False. Useful as a CI gate. |
+| `--update-headline-baseline` |  | false |  | Re-mint the headline baseline JSON (at --headline-baseline) from the current run and exit. Run this after an INTENTIONAL model change, then commit the regenerated file in the same PR — the maintainable seam for the R027 drift gate. |
 | `--verbose` |  | false |  | Include per-class scorecard rows under each validator in the text output (no effect on json/markdown formats). Useful for triage when a validator goes red. |
 
 ### `tools.backup_cli`
