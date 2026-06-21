@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import subprocess
 import sys
@@ -317,7 +318,11 @@ def test_stable_hash_survives_process_restart() -> None:
         "from utils.helpers import stable_hash; "
         "print(stable_hash('cross_process_seed'))"
     )
-    repo_root = "/Users/aaronmortara/MC/Models/Ship"
+    # Derive the repo root from THIS file's location (tests/ -> repo root) so the
+    # subprocess can resolve `.` to import utils.helpers. Hardcoding an absolute
+    # path made this fail anywhere but the original author's machine (it raised
+    # FileNotFoundError on CI, whose checkout lives under /home/runner/...).
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     a = subprocess.check_output(
         [sys.executable, "-c", code], cwd=repo_root, text=True
     ).strip()
