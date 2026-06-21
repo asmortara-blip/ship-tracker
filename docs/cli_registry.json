@@ -56,7 +56,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.anonymize_cli`` \u2014 operator-facing CLI for the DB\nanonymizer.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/anonymize_cli.py",
+      "file_path": "tools/anonymize_cli.py",
       "module": "tools.anonymize_cli",
       "parse_error": "",
       "prog": "python -m tools.anonymize_cli"
@@ -144,7 +144,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/backtests.py \u2014 run every platform backtest in one command.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/backtests.py",
+      "file_path": "tools/backtests.py",
       "module": "tools.backtests",
       "parse_error": "",
       "prog": "python -m tools.backtests"
@@ -192,7 +192,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.backup_cli`` \u2014 backup + restore CLI for the SQLite\nstate DB and the generated-reports tree.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/backup_cli.py",
+      "file_path": "tools/backup_cli.py",
       "module": "tools.backup_cli",
       "parse_error": "",
       "prog": "python -m tools.backup_cli"
@@ -236,7 +236,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "tools/briefing_tldr_cli.py \u2014 print the day's briefing TLDR to stdout.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/briefing_tldr_cli.py",
+      "file_path": "tools/briefing_tldr_cli.py",
       "module": "tools.briefing_tldr_cli",
       "parse_error": "",
       "prog": "tools.briefing_tldr_cli"
@@ -295,7 +295,7 @@
         {
           "choices": [],
           "default": null,
-          "help": "Output file path (default: /Users/aaronmortara/MC/Models/Ship/CHANGELOG.md).",
+          "help": "Output file path (default: CHANGELOG.md).",
           "is_flag": false,
           "is_positional": false,
           "name": "--out",
@@ -315,7 +315,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.changelog_cli`` \u2014 regenerate ``CHANGELOG.md``.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/changelog_cli.py",
+      "file_path": "tools/changelog_cli.py",
       "module": "tools.changelog_cli",
       "parse_error": "",
       "prog": "python -m tools.changelog_cli"
@@ -372,7 +372,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``tools.cli_index`` \u2014 auto-generate a CLI registry + markdown index.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/cli_index.py",
+      "file_path": "tools/cli_index.py",
       "module": "tools.cli_index",
       "parse_error": "",
       "prog": "python -m tools.cli_index"
@@ -411,7 +411,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.completion_cli`` \u2014 generate bash / zsh tab-completion\nscripts for the project's argparse CLIs.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/completion_cli.py",
+      "file_path": "tools/completion_cli.py",
       "module": "tools.completion_cli",
       "parse_error": "",
       "prog": "python -m tools.completion_cli"
@@ -459,7 +459,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.db_check_cli`` \u2014 DB integrity check CLI for the\nShip Tracker SQLite state database.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/db_check_cli.py",
+      "file_path": "tools/db_check_cli.py",
       "module": "tools.db_check_cli",
       "parse_error": "",
       "prog": "python -m tools.db_check_cli"
@@ -519,7 +519,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "tools/forecast_accuracy_cli.py \u2014 query the forecast accuracy log.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/forecast_accuracy_cli.py",
+      "file_path": "tools/forecast_accuracy_cli.py",
       "module": "tools.forecast_accuracy_cli",
       "parse_error": "",
       "prog": "tools.forecast_accuracy_cli"
@@ -576,7 +576,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/multi_container_snapshot_cli.py \u2014 fan-out daily snapshot runner.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/multi_container_snapshot_cli.py",
+      "file_path": "tools/multi_container_snapshot_cli.py",
       "module": "tools.multi_container_snapshot_cli",
       "parse_error": "",
       "prog": "python -m tools.multi_container_snapshot_cli"
@@ -633,7 +633,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/openapi_cli.py \u2014 write / validate the OpenAPI spec from the CLI.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/openapi_cli.py",
+      "file_path": "tools/openapi_cli.py",
       "module": "tools.openapi_cli",
       "parse_error": "",
       "prog": "python -m tools.openapi_cli"
@@ -644,7 +644,7 @@
       "directory": "tools",
       "discovered_via": "placeholder",
       "docstring": "Entry point so ``python -m tools.ops`` works the same as\n``python -m tools.ops_cli``.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/ops.py",
+      "file_path": "tools/ops.py",
       "module": "tools.ops",
       "parse_error": "",
       "prog": "python -m tools.ops"
@@ -917,7 +917,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.ops`` \u2014 operator CLI for common admin tasks.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/ops_cli.py",
+      "file_path": "tools/ops_cli.py",
       "module": "tools.ops_cli",
       "parse_error": "",
       "prog": "python -m tools.ops"
@@ -987,7 +987,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/port_supply_bulk_diff.py \u2014 aggregate snapshot deltas over a window.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_bulk_diff.py",
+      "file_path": "tools/port_supply_bulk_diff.py",
       "module": "tools.port_supply_bulk_diff",
       "parse_error": "",
       "prog": "python -m tools.port_supply_bulk_diff"
@@ -1039,7 +1039,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/port_supply_diff.py \u2014 diff two Port Supply Lines snapshots.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_diff.py",
+      "file_path": "tools/port_supply_diff.py",
       "module": "tools.port_supply_diff",
       "parse_error": "",
       "prog": "python -m tools.port_supply_diff"
@@ -1120,7 +1120,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/port_supply_export.py \u2014 CLI bulk-export for Port Supply Lines CSVs.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/port_supply_export.py",
+      "file_path": "tools/port_supply_export.py",
       "module": "tools.port_supply_export",
       "parse_error": "",
       "prog": "python -m tools.port_supply_export"
@@ -1150,7 +1150,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.replay_cli`` \u2014 replay historical alerts to a channel.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/replay_cli.py",
+      "file_path": "tools/replay_cli.py",
       "module": "tools.replay_cli",
       "parse_error": "",
       "prog": "python -m tools.replay_cli"
@@ -1189,7 +1189,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.schema_docs_cli`` - generate DB schema documentation.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/schema_docs_cli.py",
+      "file_path": "tools/schema_docs_cli.py",
       "module": "tools.schema_docs_cli",
       "parse_error": "",
       "prog": "python -m tools.schema_docs_cli"
@@ -1267,7 +1267,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "tools/snapshot_integrity_cli.py \u2014 operator-callable snapshot integrity checks.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/snapshot_integrity_cli.py",
+      "file_path": "tools/snapshot_integrity_cli.py",
       "module": "tools.snapshot_integrity_cli",
       "parse_error": "",
       "prog": "tools.snapshot_integrity_cli"
@@ -1306,7 +1306,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "Design-system audit tool.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/styles_audit.py",
+      "file_path": "tools/styles_audit.py",
       "module": "tools.styles_audit",
       "parse_error": "",
       "prog": "python -m tools.styles_audit"
@@ -1378,7 +1378,7 @@
       "directory": "tools",
       "discovered_via": "ast",
       "docstring": "tools/supply_shock_cli.py \u2014 CLI runner for supply-shock scenarios.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/supply_shock_cli.py",
+      "file_path": "tools/supply_shock_cli.py",
       "module": "tools.supply_shock_cli",
       "parse_error": "",
       "prog": "python -m tools.supply_shock_cli"
@@ -1453,7 +1453,7 @@
       "directory": "tools",
       "discovered_via": "factory",
       "docstring": "``python -m tools.test_flakiness_cli`` \u2014 flaky-test tracker CLI.",
-      "file_path": "/Users/aaronmortara/MC/Models/Ship/tools/test_flakiness_cli.py",
+      "file_path": "tools/test_flakiness_cli.py",
       "module": "tools.test_flakiness_cli",
       "parse_error": "",
       "prog": "python -m tools.test_flakiness_cli"

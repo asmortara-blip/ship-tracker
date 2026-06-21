@@ -109,7 +109,7 @@ python -m tools.changelog_cli
 | --- | --- | --- | --- | --- |
 | `--group-by` |  | `date` | `date`, `category`, `flat` | How to group commits in the rendered Markdown (default: date). |
 | `--limit` |  | — |  | Max number of commits to include (default: no cap). |
-| `--out` |  | — |  | Output file path (default: /Users/aaronmortara/MC/Models/Ship/CHANGELOG.md). |
+| `--out` |  | — |  | Output file path (default: CHANGELOG.md). |
 | `--print` |  | false |  | Print to stdout instead of writing a file. |
 | `--since` |  | `90d` |  | Lower-bound cutoff. Accepts an absolute date (`2026-01-01`), a git relative string (`2 weeks ago`), or the shorthand `30d` / `12w` / `6m` / `1y` (default: 90d). |
 | `--title` |  | `Changelog` |  | Top-level title (default: Changelog). |

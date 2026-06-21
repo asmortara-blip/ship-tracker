@@ -103,7 +103,7 @@ class CliSpec:
 
     directory: str                  # "tools" or "cli"
     module: str                     # "tools.port_supply_diff"
-    file_path: str                  # absolute path on disk
+    file_path: str                  # repo-relative POSIX path (machine-independent)
     prog: str                       # "python -m tools.port_supply_diff"
     description: str = ""
     docstring: str = ""             # first paragraph of the module docstring
@@ -118,6 +118,19 @@ class CliSpec:
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _strip_repo_root(text: str) -> str:
+    """Make rendered docs machine-INDEPENDENT: strip the absolute repo-root
+    prefix from any path in ``text`` so the committed output is identical across
+    dev machines and CI — no ``/Users/<name>/...`` vs ``/home/runner/...`` drift
+    (which made the docs perpetually "stale" in CI), and no local username /
+    absolute path leaked into committed files. Handles POSIX + Windows separators.
+    """
+    root = str(_REPO_ROOT)
+    return (text.replace(root + "/", "")
+                .replace(root + "\\", "")
+                .replace(root, ""))
 
 # Files that look like helper modules even though they live in tools/.
 # We keep this list narrow — the source filter below already excludes
@@ -588,7 +601,7 @@ def _spec_from_file(path: Path, *, verbose: bool = False) -> CliSpec:
         return CliSpec(
             directory=directory,
             module=dotted,
-            file_path=str(path.resolve()),
+            file_path=rel.as_posix(),
             prog=prog,
             description=description,
             docstring=docstring,
@@ -608,7 +621,7 @@ def _spec_from_file(path: Path, *, verbose: bool = False) -> CliSpec:
         return CliSpec(
             directory=directory,
             module=dotted,
-            file_path=str(path.resolve()),
+            file_path=rel.as_posix(),
             prog=prog,
             description=description,
             docstring=docstring,
@@ -693,7 +706,7 @@ def build_registry(clis: Iterable[CliSpec]) -> dict:
 def render_json(clis: Iterable[CliSpec]) -> str:
     """Render the JSON registry — pretty-printed, sorted keys for diff."""
     payload = build_registry(clis)
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    return _strip_repo_root(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _format_default(arg: ArgSpec) -> str:
@@ -821,7 +834,7 @@ def render_markdown(clis: Iterable[CliSpec]) -> str:
     text = "\n".join(lines)
     if not text.endswith("\n"):
         text += "\n"
-    return text
+    return _strip_repo_root(text)
 
 
 # ---------------------------------------------------------------------------
