@@ -646,6 +646,11 @@ def _run_var_coverage() -> BacktestResult:
             healthy=True,                       # vacuous — nothing to reject
             summary=r.summary,
             raw_fields={"basis": r.basis, "n_observations": r.n_observations},
+            # Carry one honest status row so the every-validator-has-rows
+            # invariant holds even with no real cache (e.g. a fresh CI checkout,
+            # which has no cache/stocks/*.parquet) — empty rows would fail it.
+            scorecard_rows=[{"label": "status", "metric_name": "basis",
+                             "value": r.basis}],
         )
 
     # Conditional coverage RAISES the bar: a VaR that passes the Kupiec count
