@@ -44,7 +44,10 @@ jobs:
           pip install pytest pytest-timeout pytest-cov
 
       - name: Run pytest
-        run: pytest --cov=. --cov-report=xml --cov-report=term
+        # TEMPORARY DIAGNOSTIC: override pytest.ini addopts to DROP -x (fail-fast)
+        # so a single run reports EVERY failure (-rfE), not just the first. Revert
+        # to `pytest --cov=...` (honoring the -x default) once the suite is green.
+        run: pytest -o "addopts=--timeout=30 --strict-markers -q -rfE" --cov=. --cov-report=xml --cov-report=term
 
       - name: Run consolidated backtest health gate (strict)
         # All 9 validators must report healthy on the bundled synth;

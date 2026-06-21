@@ -181,6 +181,17 @@ def test_ewma_var_empty_and_thin_input_safe() -> None:
     assert ewma_var(pd.Series([0.01, -0.01, 0.02])).var_pct == 0.0   # < 10 obs
 
 
+def test_ewma_var_zero_variance_series_is_real_zero_not_empty() -> None:
+    # A perfectly-hedged book nets to an identically-zero return series. Its
+    # honest VaR is REAL 0 (zero risk), NOT "empty" (no data) — n_observations
+    # must reflect the real data. Pinned at EXACT zero (not a float residual) so
+    # it's deterministic across environments (this is the case that failed in CI
+    # but passed locally on a tiny residual).
+    out = ewma_var(pd.Series([0.0] * 200), confidence=0.95)
+    assert out.method == "ewma" and out.n_observations == 200   # real, not empty
+    assert out.var_pct == 0.0 and out.cvar_pct == 0.0
+
+
 def test_ewma_var_horizon_scaling() -> None:
     r = _normal_returns(n=252, seed=73)
     assert ewma_var(r, horizon_days=5).var_pct == pytest.approx(
