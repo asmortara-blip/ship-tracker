@@ -77,11 +77,7 @@ def _live_feeds_offline_by_default(monkeypatch, tmp_path):
 
     for mod_name, cache_sub in (("data.sanctions_feed", "sanctions_cache"),
                                 ("data.marine_weather_feed", "marine_cache"),
-                                ("data.portwatch_feed", "portwatch_cache"),
-                                # canal_feed scrapes Suez/Panama gov sites; in CI
-                                # those 404 / SSL-error SLOWLY, blowing the 30s
-                                # per-test timeout in scheduler main() tests.
-                                ("data.canal_feed", "canal_cache")):
+                                ("data.portwatch_feed", "portwatch_cache")):
         try:
             mod = __import__(mod_name, fromlist=["_CACHE_DIR"])
             monkeypatch.setattr(mod, "requests", _NoNet, raising=False)
@@ -89,6 +85,17 @@ def _live_feeds_offline_by_default(monkeypatch, tmp_path):
                                 raising=False)
         except Exception:
             pass
+    # canal_feed scrapes Suez/Panama gov sites; in CI those 404 / SSL-error
+    # SLOWLY, blowing the 30s per-test timeout in scheduler main() tests.
+    # Neutralize ONLY the network (requests) — leave _CACHE_DIR alone, since
+    # test_cache_dir_exists_on_import asserts the real cache dir exists, and the
+    # feed's own fixtures isolate the cache where needed. Per-test mocks of
+    # cf.requests.get still override this.
+    try:
+        import data.canal_feed as _cf
+        monkeypatch.setattr(_cf, "requests", _NoNet, raising=False)
+    except Exception:
+        pass
     yield
 
 
