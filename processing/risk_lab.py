@@ -224,11 +224,17 @@ def ewma_var(
         return _empty_var(confidence, horizon_days, "ewma")
 
     sigma = _ewma_vol(series.to_numpy(dtype=float), lam)
-    if sigma <= 0 or not math.isfinite(sigma):
+    # sigma == 0 is a VALID input, NOT "no data": a perfectly-hedged book nets to
+    # an identically-zero return series, whose honest VaR/CVaR is exactly 0 (real
+    # zero risk). Only a non-finite or negative sigma is degenerate -> empty.
+    # (Returning "empty" on sigma==0 was a regression vs historical_var, which
+    # correctly reports a real 0 here; it manifested only where the hedge nets to
+    # EXACTLY zero — e.g. CI — vs a tiny float residual locally.)
+    if not math.isfinite(sigma) or sigma < 0.0:
         return _empty_var(confidence, horizon_days, "ewma")
 
     z = _z_alpha(1.0 - confidence)
-    var_pct_1d = z * sigma                       # zero-mean RiskMetrics band
+    var_pct_1d = z * sigma                       # zero-mean RiskMetrics band (0 if sigma==0)
     var_pct = min(0.0, var_pct_1d * math.sqrt(horizon_days))
     alpha = 1.0 - confidence
     phi_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)

@@ -1,5 +1,5 @@
 {
-  "total": 18,
+  "total": 19,
   "validators": [
     {
       "headline_label": "Best component",
@@ -256,6 +256,17 @@
         "passes": 5
       },
       "summary": "Graph centrality dominance: 5/5 runs put the STAR hub at strict-max betweenness + fragmentation on removal; pass rate 100% (threshold 95%)"
+    },
+    {
+      "headline_label": "status",
+      "headline_value": "not evaluated (no cached price history)",
+      "healthy": true,
+      "name": "VaR Coverage (Kupiec POF)",
+      "raw": {
+        "basis": "insufficient",
+        "n_observations": 0
+      },
+      "summary": "No real return history available \u2014 coverage not evaluated."
     }
   ]
 }
