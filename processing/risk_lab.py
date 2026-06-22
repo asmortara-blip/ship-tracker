@@ -88,6 +88,48 @@ class MarketRegime:
 # RiskMetrics daily EWMA decay for the vol-adaptive ("ewma") VaR method.
 EWMA_LAMBDA = 0.94
 
+# Degrees of freedom for the Student-t tail used by the "ewma_t" method. The
+# Gaussian EWMA VaR is coverage-tested OK at 95% but is REJECTED at 99% on real
+# 2021-2026 shipping-equity returns (it under-states the fat tail). A Student-t
+# tail with nu=6 (excess kurtosis 6/(nu-4)=3.0 — a realistic daily-equity fat
+# tail) restores 99% coverage while still passing 95%. nu was picked on the
+# real cache: it is the value that keeps BOTH confidences un-rejected by Kupiec
+# with the most margin (nu=4 over-breaches the 95% body; nu>=8 starts to
+# under-cover the 99% tail again). See ``var_coverage_backtest`` for the test.
+EWMA_T_DOF = 6.0
+
+
+def _student_t_var_es_multipliers(alpha: float, nu: float) -> tuple[float, float]:
+    """Left-tail VaR & ES multipliers (per unit sigma) for a *standardized*
+    (unit-variance) Student-t with ``nu`` degrees of freedom, at level ``alpha``.
+
+    Returns ``(q, es)`` — both NEGATIVE (left tail), to be multiplied by the
+    volatility forecast sigma. The raw Student-t has variance nu/(nu-2), so we
+    rescale by ``sqrt((nu-2)/nu)`` to make sigma the true return std (matching
+    the Gaussian path, where sigma is the std and the multiplier is z_alpha).
+
+    VaR:  q  = sqrt((nu-2)/nu) * t_ppf(alpha, nu)
+    ES :  es = sqrt((nu-2)/nu) * -( f_nu(t_alpha) / alpha ) * (nu + t_alpha^2)/(nu-1)
+
+    Falls back to the Gaussian multipliers when scipy is unavailable.
+    """
+    if nu <= 2.0:                       # variance undefined for nu<=2 -> Gaussian
+        z = _z_alpha(alpha)
+        phi = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
+        return z, -(phi / alpha)
+    try:
+        from scipy.stats import t as _t
+        scale = math.sqrt((nu - 2.0) / nu)
+        t_a = float(_t.ppf(alpha, nu))
+        q = scale * t_a
+        f = float(_t.pdf(t_a, nu))
+        es = scale * (-(f / alpha) * (nu + t_a * t_a) / (nu - 1.0))
+        return q, es
+    except Exception:
+        z = _z_alpha(alpha)
+        phi = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
+        return z, -(phi / alpha)
+
 
 def historical_var(
     returns: pd.Series,
@@ -204,9 +246,10 @@ def ewma_var(
     horizon_days: int = 1,
     portfolio_value: float = 0.0,
     lam: float = EWMA_LAMBDA,
+    nu: Optional[float] = None,
 ) -> VaRResult:
-    """RiskMetrics EWMA VaR: a zero-mean Gaussian band scaled by the EWMA
-    volatility forecast (responsive to the current vol regime).
+    """RiskMetrics EWMA VaR: a zero-mean band scaled by the EWMA volatility
+    forecast (responsive to the current vol regime).
 
     Unlike the flat sample-sigma parametric VaR, the EWMA vol weights recent
     returns more, so the band widens as volatility builds and narrows as it
@@ -216,12 +259,20 @@ def ewma_var(
     ``var_coverage_backtest``). Zero-mean by convention — daily drift is
     negligible and noisy at the VaR horizon, and it matches the
     coverage-tested estimator exactly.
+
+    ``nu`` selects the tail distribution: ``None`` (default) is the Gaussian
+    band (method ``"ewma"``); a finite ``nu`` uses a *standardized* Student-t
+    tail with that many degrees of freedom (method ``"ewma_t"``), which is
+    coverage-correct at 99% where the Gaussian under-states the fat tail. The
+    sigma scaling is identical, so the t-band only differs in the quantile
+    shape — wider in the deep tail, marginally narrower in the body.
     """
+    method_name = "ewma" if nu is None else "ewma_t"
     if returns is None:
-        return _empty_var(confidence, horizon_days, "ewma")
+        return _empty_var(confidence, horizon_days, method_name)
     series = pd.Series(returns).dropna()
     if len(series) < 10:
-        return _empty_var(confidence, horizon_days, "ewma")
+        return _empty_var(confidence, horizon_days, method_name)
 
     sigma = _ewma_vol(series.to_numpy(dtype=float), lam)
     # sigma == 0 is a VALID input, NOT "no data": a perfectly-hedged book nets to
@@ -231,20 +282,24 @@ def ewma_var(
     # correctly reports a real 0 here; it manifested only where the hedge nets to
     # EXACTLY zero — e.g. CI — vs a tiny float residual locally.)
     if not math.isfinite(sigma) or sigma < 0.0:
-        return _empty_var(confidence, horizon_days, "ewma")
+        return _empty_var(confidence, horizon_days, method_name)
 
-    z = _z_alpha(1.0 - confidence)
-    var_pct_1d = z * sigma                       # zero-mean RiskMetrics band (0 if sigma==0)
-    var_pct = min(0.0, var_pct_1d * math.sqrt(horizon_days))
     alpha = 1.0 - confidence
-    phi_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
-    cvar_pct_1d = -sigma * (phi_z / alpha)       # zero-mean Gaussian CVaR
+    if nu is None:
+        z = _z_alpha(alpha)
+        phi_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
+        q, es = z, -(phi_z / alpha)              # Gaussian VaR & CVaR multipliers
+    else:
+        q, es = _student_t_var_es_multipliers(alpha, float(nu))
+    var_pct_1d = q * sigma                        # zero-mean band (0 if sigma==0)
+    var_pct = min(0.0, var_pct_1d * math.sqrt(horizon_days))
+    cvar_pct_1d = es * sigma                      # zero-mean tail mean (CVaR)
     cvar_pct = min(0.0, cvar_pct_1d * math.sqrt(horizon_days))
 
     return VaRResult(
         confidence=confidence,
         horizon_days=horizon_days,
-        method="ewma",
+        method=method_name,
         var_pct=round(var_pct, 6),
         cvar_pct=round(cvar_pct, 6),
         portfolio_value=float(portfolio_value),
@@ -293,6 +348,12 @@ def portfolio_var(
             portfolio_returns,
             confidence=confidence, horizon_days=horizon_days,
             portfolio_value=portfolio_value,
+        )
+    if method == "ewma_t":
+        return ewma_var(
+            portfolio_returns,
+            confidence=confidence, horizon_days=horizon_days,
+            portfolio_value=portfolio_value, nu=EWMA_T_DOF,
         )
     return historical_var(
         portfolio_returns,
@@ -531,6 +592,7 @@ __all__ = [
     "ewma_var",
     "portfolio_var",
     "EWMA_LAMBDA",
+    "EWMA_T_DOF",
     "stress_test_scenario",
     "stress_test_all_scenarios",
     "detect_regime",

@@ -124,13 +124,17 @@ def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
         subtitle=(
             f"VaR & CVaR at {confidence*100:.0f}% confidence, 1-day horizon. "
             "EWMA (RiskMetrics vol-adaptive) is the platform's live method — "
-            "coverage-tested against realized P&L; historical (empirical "
-            "percentile) and parametric (flat Gaussian) shown for comparison."
+            "coverage-tested against realized P&L. EWMA-t adds a Student-t fat "
+            "tail (the Gaussian EWMA is coverage-correct at 95% but under-states "
+            "the 99% tail on real returns); historical (empirical percentile) "
+            "and parametric (flat Gaussian) shown for comparison."
         ),
     )
 
     ewma = portfolio_var(returns_df, weights, confidence=confidence,
                         method="ewma", portfolio_value=portfolio_value)
+    ewma_t = portfolio_var(returns_df, weights, confidence=confidence,
+                        method="ewma_t", portfolio_value=portfolio_value)
     hist = portfolio_var(returns_df, weights, confidence=confidence,
                         method="historical", portfolio_value=portfolio_value)
     para = portfolio_var(returns_df, weights, confidence=confidence,
@@ -141,6 +145,10 @@ def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
          "value": f"{ewma.var_pct*100:+.2f}%",
          "accent": C_LOW,
          "sublabel": f"${ewma.var_dollar:,.0f} — vol-adaptive (platform default)"},
+        {"label": "VaR (EWMA-t · fat tail)",
+         "value": f"{ewma_t.var_pct*100:+.2f}%",
+         "accent": C_LOW,
+         "sublabel": f"${ewma_t.var_dollar:,.0f} — Student-t, 99%-calibrated"},
         {"label": "VaR (Historical)",
          "value": f"{hist.var_pct*100:+.2f}%",
          "accent": C_LOW,
@@ -155,6 +163,10 @@ def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
          "value": f"{ewma.cvar_pct*100:+.2f}%",
          "accent": C_LOW,
          "sublabel": f"${ewma.cvar_dollar:,.0f} — expected loss in the tail"},
+        {"label": "CVaR (EWMA-t · fat tail)",
+         "value": f"{ewma_t.cvar_pct*100:+.2f}%",
+         "accent": C_LOW,
+         "sublabel": f"${ewma_t.cvar_dollar:,.0f} — Student-t tail mean"},
         {"label": "CVaR (Historical)",
          "value": f"{hist.cvar_pct*100:+.2f}%",
          "accent": C_LOW,
@@ -164,8 +176,8 @@ def _render_var_strip(returns_df: pd.DataFrame, weights: dict,
          "accent": C_LOW,
          "sublabel": f"${para.cvar_dollar:,.0f} — closed-form Gaussian"},
     ]
-    metric_card_row(var_cards, columns=3)
-    metric_card_row(cvar_cards, columns=3)
+    metric_card_row(var_cards, columns=4)
+    metric_card_row(cvar_cards, columns=4)
 
 
 # ─── Section 1b: Editorial commentary (per-tab LLM + template fallback) ───
