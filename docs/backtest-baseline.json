@@ -1,5 +1,5 @@
 {
-  "total": 19,
+  "total": 20,
   "validators": [
     {
       "headline_label": "Best component",
@@ -267,6 +267,17 @@
         "n_observations": 0
       },
       "summary": "No real return history available \u2014 coverage not evaluated."
+    },
+    {
+      "headline_label": "status",
+      "headline_value": "not evaluated (no cached price history)",
+      "healthy": true,
+      "name": "ES Coverage (Acerbi-Szekely)",
+      "raw": {
+        "basis": "insufficient",
+        "n_observations": 0
+      },
+      "summary": "No real return history available \u2014 ES coverage not evaluated."
     }
   ]
 }
