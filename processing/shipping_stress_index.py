@@ -701,14 +701,6 @@ def compute_shipping_stress(
     # synthetic/modeled canal fallback leaves the hardcoded baseline alone.
     # Default (canal_stats=None) is a no-op, so the callers that don't supply the
     # feed (and the whole test suite) keep the deterministic baseline.
-    canal_realness: dict = {}
-    if canal_stats:
-        try:
-            from processing.canal_chokepoint_sync import apply_live_canal_state
-            canal_realness = apply_live_canal_state(canal_stats)
-        except Exception:
-            logger.exception("compute_shipping_stress: canal overlay failed")
-
     # Real PortWatch transit-collapse overlay on the NON-canal straits (additive,
     # escalate-only, never-downgrade). Default (None) is a no-op, so callers that
     # don't supply the feed — and the whole test suite — keep the baseline.
@@ -719,6 +711,20 @@ def compute_shipping_stress(
             transit_realness = apply_live_chokepoint_transits(chokepoint_transits)
         except Exception:
             logger.exception("compute_shipping_stress: chokepoint transit overlay failed")
+
+    # Canal nodes (Suez/Panama) by source precedence (R267): real PortWatch
+    # transit > real canal scrape > hardcoded baseline. PortWatch carries real
+    # canal rows and is validator-grade; the brittle canal_feed scrape (almost
+    # always synthetic) is demoted to a real-only fallback. Threaded with the
+    # transit feed so the two highest-leverage nodes light up from PortWatch even
+    # when the scrape is synthetic. No-op when neither source is supplied.
+    canal_realness: dict = {}
+    if canal_stats or chokepoint_transits is not None:
+        try:
+            from processing.canal_chokepoint_sync import apply_live_canal_nodes
+            canal_realness = apply_live_canal_nodes(canal_stats, chokepoint_transits)
+        except Exception:
+            logger.exception("compute_shipping_stress: canal-node overlay failed")
 
     delayed_by_route = _delayed_counts_by_route(voyage_fleet)
 

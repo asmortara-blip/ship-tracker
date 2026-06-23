@@ -42,19 +42,31 @@ def _escalate_level(baseline: str, derived: str) -> str:
 
 
 # PortWatch portname keyword → chokepoint-registry key, for the NON-canal straits
-# ONLY. Suez + Panama are deliberately EXCLUDED — they are owned by the live canal
-# feed (``apply_live_canal_state``); two overlays writing the same global node
-# would fight, so the transit overlay stays off the canal nodes.
+# ONLY. Suez + Panama are handled by ``apply_live_canal_nodes`` (the precedence
+# resolver), NOT this list — keeping the per-strait transit overlay and the
+# canal-node resolver on disjoint nodes so two overlays never write the same node.
 _STRAIT_KEYWORDS = [
     ("mandeb", "bab_el_mandeb"), ("hormuz", "hormuz"), ("malacca", "malacca"),
     ("gibraltar", "gibraltar"), ("dover", "dover"), ("danish", "danish_straits"),
     ("lombok", "lombok_sunda"), ("sunda", "lombok_sunda"),
 ]
 
+# PortWatch portname keyword → canal-registry key, for the two canal nodes that
+# ``apply_live_canal_nodes`` drives from the real PortWatch chokepoint rows.
+_CANAL_KEYWORDS = [("suez", "suez"), ("panama", "panama")]
+
 
 def _strait_key_for(name: str):
     low = (name or "").lower()
     for kw, key in _STRAIT_KEYWORDS:
+        if kw in low:
+            return key
+    return None
+
+
+def _canal_key_for(name: str):
+    low = (name or "").lower()
+    for kw, key in _CANAL_KEYWORDS:
         if kw in low:
             return key
     return None
@@ -206,4 +218,94 @@ def apply_live_chokepoint_transits(transits, *, registry=None, recent: int = 7,
             reg[key] = replace(reg[key], current_risk_level=new_level)
         marker[key] = {"realness": "live", "risk_level": new_level,
                        "transit_drop": round(float(drop), 4)}
+    return marker
+
+
+def apply_live_canal_nodes(canal_stats, transits, *, registry=None,
+                           recent: int = 7, baseline: int = 90) -> dict:
+    """Resolve the Suez/Panama chokepoint nodes by SOURCE PRECEDENCE (rec R267):
+
+        real PortWatch transit  >  real canal scrape  >  hardcoded baseline
+
+    PortWatch is the validator-grade daily-transit source and carries real
+    Suez/Panama rows; the ``canal_feed`` scrape is brittle HTML regex that
+    near-always returns ``is_synthetic=True``, so it is demoted to a real-only
+    FALLBACK used only when PortWatch is unavailable. This lights up the two
+    highest-leverage chokepoint nodes (the #1 SSI weight) — previously dark,
+    because the canal feed owned them yet almost never returned a real scrape.
+
+    ESCALATE-ONLY and ratchet-free for BOTH real tiers: the derived level is
+    merged with the PRISTINE baseline (``_BASELINE_RISK``) and only the more
+    severe is kept, so a normal/cleared reading returns the node to baseline
+    rather than downgrading below it or ratcheting up forever. Reassigns via
+    ``dataclasses.replace`` so ``chokepoint_analyzer``'s identity lookups stay
+    stable. A present real signal is NEVER overridden by the synthetic feed.
+
+    Disjoint from ``apply_live_chokepoint_transits`` (non-canal straits only), so
+    the two overlays never write the same node.
+
+    Returns ``{canal: {"realness", "source": "portwatch"|"canal"|"baseline",
+    "risk_level", ...}}`` for each canal that had any input.
+    """
+    reg = CHOKEPOINTS if registry is None else registry
+    rows = getattr(transits, "rows", transits) or []
+    basis = getattr(transits, "basis", "real" if rows else "unavailable")
+    pw_real = basis == "real" and bool(rows)
+
+    # Canal key → its real PortWatch chokepoint_id (matched by portname).
+    pw_id_for: dict[str, str] = {}
+    if pw_real:
+        for r in rows:
+            k = _canal_key_for(r.name)
+            if k and k not in pw_id_for:
+                pw_id_for[k] = r.chokepoint_id
+
+    # Canal name → its CanalStats scrape (the fallback tier).
+    stats_for: dict = {}
+    for s in canal_stats or []:
+        c = (getattr(s, "canal", "") or "").strip().lower()
+        if c in _CANAL_TO_KEY:
+            stats_for[c] = s
+
+    marker: dict[str, dict] = {}
+    for canal, key in _CANAL_TO_KEY.items():
+        if key not in reg:
+            continue
+        pristine = _BASELINE_RISK.get(key, reg[key].current_risk_level)
+
+        # 1) Real PortWatch transit (top precedence).
+        if key in pw_id_for:
+            from data.portwatch_feed import transit_drop_ratio
+            drop = transit_drop_ratio(rows, pw_id_for[key], recent=recent,
+                                      baseline=baseline)
+            if drop is not None:
+                new_level = _escalate_level(pristine, _transit_drop_to_level(drop))
+                if new_level != reg[key].current_risk_level:
+                    reg[key] = replace(reg[key], current_risk_level=new_level)
+                marker[canal] = {"realness": "live", "source": "portwatch",
+                                 "risk_level": new_level,
+                                 "transit_drop": round(float(drop), 4)}
+                continue
+
+        # 2) Real canal scrape (fallback, escalate-only).
+        stats = stats_for.get(canal)
+        if stats is not None and not bool(getattr(stats, "is_synthetic", True)):
+            fields = map_canal_to_chokepoint(stats)
+            new_level = _escalate_level(pristine, fields["current_risk_level"])
+            repl = {"current_risk_level": new_level,
+                    "daily_vessels": fields["daily_vessels"]}
+            if new_level != pristine:   # adopt the cause only when we escalated
+                repl["current_disruption_type"] = fields["current_disruption_type"]
+            reg[key] = replace(reg[key], **repl)
+            marker[canal] = {"realness": "live", "source": "canal",
+                             "risk_level": new_level,
+                             "status": getattr(stats, "status", "")}
+            continue
+
+        # 3) Only a synthetic scrape (or nothing real): leave baseline, report it
+        #    honestly as modeled — never present the synthetic feed as observed.
+        if stats is not None:
+            marker[canal] = {"realness": "modeled", "source": "baseline",
+                             "risk_level": reg[key].current_risk_level,
+                             "status": getattr(stats, "status", "")}
     return marker
