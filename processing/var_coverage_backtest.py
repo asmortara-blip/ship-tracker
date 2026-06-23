@@ -36,6 +36,11 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+# Share the live engine's Student-t degrees of freedom so the backtest and the
+# deployed "ewma_t" VaR use the IDENTICAL tail (risk_lab pulls only numpy/pandas/
+# loguru — no network/Streamlit — so this stays headless-safe).
+from processing.risk_lab import EWMA_T_DOF as _EWMA_T_DOF
+
 # Default shipping universe to coverage-test (matches the Risk-Lab book).
 _DEFAULT_TICKERS = ["ZIM", "MATX", "SBLK", "DAC", "CMRE", "STNG"]
 
@@ -215,8 +220,17 @@ def _rolling_var_breaches(
             z = float(norm.ppf(1.0 - confidence))
         except Exception:
             z = -1.6448536269514722 if confidence >= 0.95 else -1.2815515594
-    # Causal EWMA vol forecast (RiskMetrics) for the vol-adaptive method.
-    ewma = _ewma_sigma(r, _EWMA_LAMBDA, window) if method == "ewma" else None
+    # Fat-tailed variant: a standardized Student-t quantile (unit variance, so it
+    # scales by the same sigma) replaces the Gaussian z. Coverage-correct at 99%
+    # where the Gaussian under-states the tail. Shares EWMA_T_DOF with the live
+    # engine so the deployed VaR and this backtest use the identical tail.
+    t_mult = None
+    if method == "ewma_t":
+        from processing.risk_lab import _student_t_var_es_multipliers
+        t_mult = _student_t_var_es_multipliers(1.0 - confidence, _EWMA_T_DOF)[0]
+    # Causal EWMA vol forecast (RiskMetrics) for the vol-adaptive methods.
+    ewma = (_ewma_sigma(r, _EWMA_LAMBDA, window)
+            if method in ("ewma", "ewma_t") else None)
 
     obs = breaches = 0
     hits: list = []
@@ -227,6 +241,9 @@ def _rolling_var_breaches(
         elif method == "ewma" and z is not None:
             # Zero-mean RiskMetrics band scaled by the day's EWMA vol forecast.
             var_t = float(z * ewma[t])
+        elif method == "ewma_t" and t_mult is not None:
+            # Same EWMA band, but a fat-tailed Student-t quantile.
+            var_t = float(t_mult * ewma[t])
         else:
             var_t = float(np.percentile(win, q))
         obs += 1
