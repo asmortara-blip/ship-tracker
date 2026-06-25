@@ -230,3 +230,93 @@ def test_compute_shipping_stress_applies_real_transits(restore_all_chokepoints):
         {}, {}, [], [],
         chokepoint_transits=_transits("cpX", "Malacca Strait", collapse=True, drop_frac=0.9))
     assert CHOKEPOINTS["malacca"].current_risk_level == "CRITICAL"
+
+
+# ── canal-node precedence resolver (R267) ─────────────────────────────────────
+# Precedence: real PortWatch transit > real canal scrape > hardcoded baseline.
+
+from processing.canal_chokepoint_sync import apply_live_canal_nodes  # noqa: E402
+
+
+def test_canal_node_lit_up_by_real_portwatch():
+    # The headline win: a real PortWatch Suez collapse drives the node CRITICAL
+    # even though the canal scrape is synthetic (and says Normal).
+    reg = _reg_copy()
+    rows = _transits("cp1", "Suez Canal", collapse=True, drop_frac=0.6)
+    marker = apply_live_canal_nodes(
+        [_stats("Suez", "Normal", synth=True)], rows, registry=reg)
+    assert reg["suez"].current_risk_level == "CRITICAL"
+    assert marker["suez"]["realness"] == "live"
+    assert marker["suez"]["source"] == "portwatch"
+
+
+def test_synthetic_canal_never_overrides_real_portwatch():
+    # A present real signal is never pulled back down by the synthetic feed.
+    reg = _reg_copy()
+    rows = _transits("cp1", "Suez Canal", collapse=True, drop_frac=0.6)
+    apply_live_canal_nodes([_stats("Suez", "Normal", synth=True)], rows, registry=reg)
+    assert reg["suez"].current_risk_level == "CRITICAL"
+
+
+def test_canal_falls_back_to_real_scrape_when_portwatch_unavailable():
+    reg = _reg_copy()
+    unavailable = PortWatchTransits(rows=[], basis="unavailable", latest_date="",
+                                    source=DataSource.modeled("x"))
+    marker = apply_live_canal_nodes(
+        [_stats("Suez", "Disrupted", synth=False)], unavailable, registry=reg)
+    assert reg["suez"].current_risk_level == "CRITICAL"
+    assert marker["suez"]["source"] == "canal"
+
+
+def test_real_portwatch_takes_precedence_over_real_canal():
+    # Both sources real: PortWatch (collapse) wins over the canal scrape (Normal).
+    reg = _reg_copy()
+    rows = _transits("cp1", "Suez Canal", collapse=True, drop_frac=0.6)
+    marker = apply_live_canal_nodes(
+        [_stats("Suez", "Normal", synth=False)], rows, registry=reg)
+    assert marker["suez"]["source"] == "portwatch"
+    assert reg["suez"].current_risk_level == "CRITICAL"
+
+
+def test_canal_node_escalate_only_never_downgrades():
+    # Real PortWatch normal flow lights the node up but must not lower the baseline.
+    reg = _reg_copy()
+    marker = apply_live_canal_nodes(
+        [], _transits("cp1", "Suez Canal", collapse=False), registry=reg)
+    assert reg["suez"].current_risk_level == _BASELINE_RISK["suez"]
+    assert marker["suez"]["source"] == "portwatch"
+
+
+def test_canal_node_ratchet_free():
+    reg = _reg_copy()
+    apply_live_canal_nodes(
+        [], _transits("cp1", "Suez Canal", collapse=True, drop_frac=0.6), registry=reg)
+    assert reg["suez"].current_risk_level == "CRITICAL"
+    # Collapse clears → merges against pristine baseline → no ratchet.
+    apply_live_canal_nodes(
+        [], _transits("cp1", "Suez Canal", collapse=False), registry=reg)
+    assert reg["suez"].current_risk_level == _BASELINE_RISK["suez"]
+
+
+def test_synthetic_only_canal_is_modeled_no_mutation():
+    reg = _reg_copy()
+    before = reg["panama"].current_risk_level
+    marker = apply_live_canal_nodes(
+        [_stats("Panama", "Disrupted", synth=True)], None, registry=reg)
+    assert reg["panama"].current_risk_level == before
+    assert marker["panama"]["realness"] == "modeled"
+    assert marker["panama"]["source"] == "baseline"
+
+
+def test_canal_resolver_no_input_is_empty():
+    reg = _reg_copy()
+    assert apply_live_canal_nodes(None, None, registry=reg) == {}
+
+
+def test_ssi_lights_canal_node_from_portwatch(restore_all_chokepoints):
+    from processing.shipping_stress_index import compute_shipping_stress
+    rep = compute_shipping_stress(
+        {}, {}, [], [],
+        chokepoint_transits=_transits("cp1", "Suez Canal", collapse=True, drop_frac=0.6))
+    assert CHOKEPOINTS["suez"].current_risk_level == "CRITICAL"
+    assert rep.canal_data_realness["suez"]["source"] == "portwatch"

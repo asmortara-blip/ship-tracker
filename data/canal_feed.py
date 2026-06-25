@@ -8,6 +8,14 @@ Fetch strategy (waterfall):
   2. Shipping-news RSS feeds with canal keywords
   3. Realistic synthetic data based on known operational ranges
 
+SSI precedence (R267): for the Suez/Panama chokepoint nodes this scrape is a
+real-only FALLBACK behind the validator-grade IMF PortWatch transit feed — see
+``processing.canal_chokepoint_sync.apply_live_canal_nodes``. Because the scrape
+almost always lands on the synthetic tier (``is_synthetic=True``), PortWatch is
+what actually lights those two nodes up; the scrape only drives them when it is
+genuinely real AND PortWatch is unavailable. Other consumers (the chokepoints
+tab, the canal-sync scheduler job) still read this feed directly.
+
 Dependencies: requests, beautifulsoup4, feedparser, loguru, streamlit
 """
 from __future__ import annotations

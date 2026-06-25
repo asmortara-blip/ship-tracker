@@ -695,6 +695,62 @@ def _run_var_coverage() -> BacktestResult:
     )
 
 
+def _run_es_coverage() -> BacktestResult:
+    """Expected-Shortfall coverage (Acerbi-Szekely Test 2) on REAL cached returns
+    — validates the tail-MEAN the desk sizes against, not just the VaR quantile.
+    Reported next to the Kupiec result (it inherits the deployed VaR's calibration
+    error). ``healthy`` goes False only on a genuine miscalibration (the ES is
+    statistically REJECTED at 95% or 99% on real data); an empty cache reports
+    'not evaluated' and stays vacuously healthy."""
+    from processing.es_coverage_backtest import run_es_coverage_backtest
+    r99 = run_es_coverage_backtest(confidence=0.99)
+    r95 = run_es_coverage_backtest(confidence=0.95)
+
+    if r99.basis != "real":
+        return BacktestResult(
+            name="ES Coverage (Acerbi-Szekely)",
+            headline_label="status",
+            headline_value="not evaluated (no cached price history)",
+            healthy=True,                       # vacuous — nothing to reject
+            summary=r99.summary,
+            raw_fields={"basis": r99.basis, "n_observations": r99.n_observations},
+            scorecard_rows=[{"label": "status", "metric_name": "basis",
+                             "value": r99.basis}],
+        )
+
+    # Rejected at EITHER confidence means the ES is mis-scaled where it matters.
+    healthy = bool(r99.well_scaled) and (r95.basis != "real" or bool(r95.well_scaled))
+    return BacktestResult(
+        name="ES Coverage (Acerbi-Szekely)",
+        headline_label="99% ES tail-mean (Z2)",
+        headline_value=(
+            f"Z2={r99.z2:.2f} vs crit {r99.z2_critical:.2f} "
+            f"({'well-scaled' if r99.well_scaled else 'UNDERESTIMATES tail'})"
+        ),
+        healthy=healthy,
+        summary=r99.summary,
+        raw_fields={
+            "n_observations":   r99.n_observations,
+            "nu":               r99.nu,
+            "window":           r99.window,
+            "z2_99":            round(r99.z2, 4),
+            "z2_critical_99":   round(r99.z2_critical, 4),
+            "n_breaches_99":    r99.n_breaches,
+            "rejected_99":      bool(r99.rejected),
+            "mean_tail_loss_99":   round(r99.mean_tail_loss, 6),
+            "mean_es_forecast_99": round(r99.mean_es_forecast, 6),
+            "z2_95":            (round(r95.z2, 4) if r95.basis == "real" else None),
+            "z2_critical_95":   (round(r95.z2_critical, 4) if r95.basis == "real" else None),
+            "n_breaches_95":    r95.n_breaches,
+            "rejected_95":      bool(r95.rejected) if r95.basis == "real" else None,
+        },
+        scorecard_rows=[
+            {"label": t, "metric_name": "in book", "value": "yes"}
+            for t in r99.tickers
+        ],
+    )
+
+
 # Canonical list — order is the display order.
 ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_ssi_components,
@@ -716,6 +772,7 @@ ADAPTERS: list[Callable[[], BacktestResult]] = [
     _run_spillover_graph_recall,
     _run_graph_centrality_dominance,
     _run_var_coverage,
+    _run_es_coverage,
 ]
 
 

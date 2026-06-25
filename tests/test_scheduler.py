@@ -355,9 +355,23 @@ def test_run_daily_briefing_job_delivery_failure_does_not_fail_job(
 
 # ─── main() CLI ─────────────────────────────────────────────────────────────
 
+def _stub_external_fetch_jobs(monkeypatch) -> None:
+    """No-op the scheduler's network-fetching ``_run_always`` jobs so the main()
+    CLI tests stay offline-deterministic. main() fires these real fetches
+    (canal-authority scrape, GDELT, PortWatch, and the data-source health ping
+    that probes yfinance/FRED/…) and a flaky/partial network can hang them past
+    the pytest-timeout instead of failing fast — a CI flake unrelated to what
+    main() is under test for. Each job's own offline-safety is covered by its
+    dedicated test."""
+    for name in ("run_canal_sync_job", "run_gdelt_chokepoint_job",
+                 "run_portwatch_transit_job", "run_health_ping_job"):
+        monkeypatch.setattr(scheduler, name, lambda *a, **k: {"ok": True})
+
+
 def test_main_exits_zero_on_success(monkeypatch, capsys) -> None:
     """A successful run yields a SystemExit(0)."""
     monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+    _stub_external_fetch_jobs(monkeypatch)
     monkeypatch.setattr(
         scheduler,
         "run_daily_briefing_job",
@@ -384,6 +398,7 @@ def test_main_exits_zero_on_success(monkeypatch, capsys) -> None:
 def test_main_exits_one_on_failure(monkeypatch, capsys) -> None:
     """A failed run yields a SystemExit(1)."""
     monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+    _stub_external_fetch_jobs(monkeypatch)
     monkeypatch.setattr(
         scheduler,
         "run_daily_briefing_job",
@@ -410,6 +425,7 @@ def test_main_exits_one_on_failure(monkeypatch, capsys) -> None:
 def test_main_push_flag_is_forwarded(monkeypatch) -> None:
     """``--push`` propagates into run_daily_briefing_job as push_to_channels=True."""
     monkeypatch.setattr(scheduler, "load_data_bundle", lambda: _stub_bundle())
+    _stub_external_fetch_jobs(monkeypatch)
 
     captured = {}
 
